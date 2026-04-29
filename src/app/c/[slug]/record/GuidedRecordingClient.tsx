@@ -7,6 +7,7 @@ import { ProgressPips } from '@/components/ProgressPips';
 import { PromptCard } from '@/components/PromptCard';
 import { RecordButton } from '@/components/RecordButton';
 import { RecordingBadge } from '@/components/RecordingBadge';
+import { PhoneViewport } from '@/components/PhoneViewport';
 import { useGuidedRecording } from '@/hooks/useGuidedRecording';
 import { recordingStore, useRecordingStore } from '@/lib/recordingStore';
 import type { PublicReviewCampaign } from '@/lib/reviews/types';
@@ -120,7 +121,8 @@ function RecorderInner({
   };
 
   return (
-    <main className="relative flex min-h-dvh flex-col bg-[#0e0d0b] text-white">
+    <PhoneViewport tone="dark">
+      <main className="relative flex min-h-dvh flex-col bg-[#0e0d0b] text-white">
       <video
         ref={videoRef}
         autoPlay
@@ -179,6 +181,7 @@ function RecorderInner({
           </div>
         </div>
       </div>
-    </main>
+      </main>
+    </PhoneViewport>
   );
 }

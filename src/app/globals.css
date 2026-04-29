@@ -19,6 +19,70 @@ body {
   box-sizing: border-box;
 }
 
+.phone-stage {
+  min-height: 100dvh;
+  background: #F5EFE2;
+}
+
+.phone-stage-dark {
+  background: #0e0d0b;
+}
+
+.phone-screen {
+  min-height: 100dvh;
+  overflow: hidden;
+  background: #F5EFE2;
+}
+
+.phone-stage-dark .phone-screen {
+  background: #0e0d0b;
+}
+
+@media (min-width: 640px) {
+  .phone-stage {
+    display: flex;
+    min-height: 100dvh;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: #EDE3D0;
+  }
+
+  .phone-stage-dark {
+    background: #15120f;
+  }
+
+  .phone-screen {
+    position: relative;
+    height: min(932px, calc(100dvh - 48px));
+    min-height: 0;
+    width: min(430px, calc(100vw - 48px));
+    overflow: hidden;
+    border: 10px solid #12100d;
+    border-radius: 42px;
+    box-shadow: 0 30px 90px rgba(42, 37, 32, 0.32);
+  }
+
+  .phone-screen::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 10px;
+    z-index: 50;
+    width: 74px;
+    height: 5px;
+    transform: translateX(-50%);
+    border-radius: 999px;
+    background: rgba(255, 252, 246, 0.28);
+    pointer-events: none;
+  }
+
+  .phone-screen > main {
+    height: 100%;
+    min-height: 100%;
+  }
+}
+
 @layer utilities {
   .scrollbar-hide::-webkit-scrollbar {
     display: none;

@@ -4,6 +4,7 @@ import { CheckCircle2, Loader2, RotateCcw } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/Button';
+import { PhoneViewport } from '@/components/PhoneViewport';
 import { RenderShimmer } from '@/components/RenderShimmer';
 import { useSubmissionPolling } from '@/hooks/useSubmissionPolling';
 import { concatClips } from '@/lib/ffmpeg';
@@ -146,7 +147,8 @@ export default function PreviewPage() {
   );
 
   return (
-    <main className="flex min-h-dvh flex-col bg-cream">
+    <PhoneViewport>
+      <main className="flex min-h-dvh flex-col bg-cream">
       <section className="flex flex-1 flex-col px-7 pt-8">
         <div className="mb-6">
           {isReady ? (
@@ -265,6 +267,7 @@ export default function PreviewPage() {
           <Button disabled>Processing...</Button>
         )}
       </footer>
-    </main>
+      </main>
+    </PhoneViewport>
   );
 }

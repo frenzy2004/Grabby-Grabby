@@ -1,7 +1,10 @@
 import { createReadStream } from 'fs';
 import { Readable } from 'stream';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSubmissionVideo } from '@/lib/server/reviewStore';
+import {
+  fetchSupabaseVideoObject,
+  getSubmissionVideo,
+} from '@/lib/server/reviewStore';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -39,10 +42,6 @@ export async function GET(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: 'Video not found' }, { status: 404 });
   }
 
-  if (video.kind === 'redirect') {
-    return NextResponse.redirect(video.redirectUrl, 302);
-  }
-
   const range = parseRange(req.headers.get('range'), video.size);
 
   if (range?.invalid) {
@@ -51,6 +50,32 @@ export async function GET(req: NextRequest, { params }: Params) {
       headers: {
         'Content-Range': `bytes */${video.size}`,
       },
+    });
+  }
+
+  if (video.kind === 'supabase') {
+    const upstreamRange =
+      range && !range.invalid ? `bytes=${range.start}-${range.end}` : null;
+    const upstream = await fetchSupabaseVideoObject(video, upstreamRange);
+
+    if (!upstream) {
+      return NextResponse.json({ error: 'Video not found' }, { status: 404 });
+    }
+
+    const headers = new Headers({
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-store',
+      'Content-Type': upstream.headers.get('content-type') ?? video.contentType,
+    });
+    const contentLength = upstream.headers.get('content-length');
+    const contentRange = upstream.headers.get('content-range');
+
+    if (contentLength) headers.set('Content-Length', contentLength);
+    if (contentRange) headers.set('Content-Range', contentRange);
+
+    return new NextResponse(upstream.body, {
+      status: upstream.status,
+      headers,
     });
   }
 

@@ -61,13 +61,15 @@ type LocalVideoResult = {
   contentType: string;
 };
 
-type RedirectVideoResult = {
-  kind: 'redirect';
+type SupabaseVideoResult = {
+  kind: 'supabase';
   submission: LocalSubmission;
-  redirectUrl: string;
+  storagePath: string;
+  size: number;
+  contentType: string;
 };
 
-export type SubmissionVideoResult = LocalVideoResult | RedirectVideoResult;
+export type SubmissionVideoResult = LocalVideoResult | SupabaseVideoResult;
 
 const LOCAL_DATA_DIR = path.join(process.cwd(), '.local-review-data');
 const UPLOADS_DIR = path.join(LOCAL_DATA_DIR, 'uploads');
@@ -187,6 +189,13 @@ function getSupabaseAdmin() {
     });
   }
   return supabaseAdmin;
+}
+
+function supabaseObjectUrl(storagePath: string) {
+  const baseUrl = serverEnv('SUPABASE_URL').replace(/\/$/, '');
+  const encodedBucket = encodeURIComponent(getBucketName());
+  const encodedPath = storagePath.split('/').map(encodeURIComponent).join('/');
+  return `${baseUrl}/storage/v1/object/${encodedBucket}/${encodedPath}`;
 }
 
 async function ensureSupabaseBucket(client: SupabaseClient) {
@@ -651,14 +660,12 @@ export async function getSubmissionVideo(
 
   if (submission.storageBackend === 'supabase') {
     if (!client) return null;
-    const { data, error } = await client.storage
-      .from(getBucketName())
-      .createSignedUrl(submission.storagePath, 10 * 60);
-    if (error || !data?.signedUrl) return null;
     return {
-      kind: 'redirect',
+      kind: 'supabase',
       submission,
-      redirectUrl: data.signedUrl,
+      storagePath: submission.storagePath,
+      size: submission.videoSize,
+      contentType: submission.videoMime || 'video/webm',
     };
   }
 
@@ -678,6 +685,31 @@ export async function getSubmissionVideo(
   } catch {
     return null;
   }
+}
+
+export async function fetchSupabaseVideoObject(
+  video: Extract<SubmissionVideoResult, { kind: 'supabase' }>,
+  rangeHeader: string | null,
+) {
+  const serviceRoleKey = serverEnv('SUPABASE_SERVICE_ROLE_KEY');
+  if (!serviceRoleKey) return null;
+
+  const headers: HeadersInit = {
+    apikey: serviceRoleKey,
+    Authorization: `Bearer ${serviceRoleKey}`,
+  };
+
+  if (rangeHeader) {
+    headers.Range = rangeHeader;
+  }
+
+  const response = await fetch(supabaseObjectUrl(video.storagePath), {
+    headers,
+    cache: 'no-store',
+  });
+
+  if (!response.ok || !response.body) return null;
+  return response;
 }
 
 export function toPublicSubmitResult(submission: LocalSubmission): PublicSubmitResult {

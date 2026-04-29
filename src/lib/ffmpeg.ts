@@ -69,58 +69,150 @@ export async function concatClips(
     ffmpeg.on('progress', ({ progress }) => onProgress(Math.max(0, Math.min(1, progress))));
   }
 
+  const runId = Math.random().toString(36).slice(2, 8);
   const inputFiles: string[] = [];
   for (let i = 0; i < inputs.length; i++) {
     const input = inputs[i]!;
     const ext = input.ext ?? 'webm';
-    const filename = `input_${i}.${ext}`;
+    const filename = `input_${runId}_${i}.${ext}`;
     await ffmpeg.writeFile(filename, await fetchFile(input.blob));
     inputFiles.push(filename);
   }
 
-  const outputName = 'matcha-moments.webm';
-  const inputArgs = inputFiles.flatMap((name) => ['-i', name]);
-  const normalizedStreams = inputFiles
-    .map((_, i) => {
-      const video =
-        `[${i}:v]scale=720:1280:force_original_aspect_ratio=decrease,` +
-        'pad=720:1280:(ow-iw)/2:(oh-ih)/2,' +
-        `setsar=1,fps=30,setpts=PTS-STARTPTS[v${i}]`;
-      const audio =
-        `[${i}:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,` +
-        `asetpts=PTS-STARTPTS[a${i}]`;
-      return `${video};${audio}`;
-    })
-    .join(';');
-  const concatInputs = inputFiles.map((_, i) => `[v${i}][a${i}]`).join('');
-  const filterComplex = `${normalizedStreams};${concatInputs}concat=n=${inputFiles.length}:v=1:a=1[v][a]`;
+  const outputName = `matcha-moments-${runId}.webm`;
+  const listName = `list-${runId}.txt`;
 
-  await ffmpeg.exec([
-    '-y',
-    ...inputArgs,
-    '-filter_complex',
-    filterComplex,
-    '-map',
-    '[v]',
-    '-map',
-    '[a]',
-    '-c:v',
-    'libvpx',
-    '-b:v',
-    '1.8M',
-    '-deadline',
-    'realtime',
-    '-cpu-used',
-    '5',
-    '-c:a',
-    'libopus',
-    '-b:a',
-    '96k',
-    '-shortest',
-    '-avoid_negative_ts',
-    'make_zero',
-    outputName,
-  ]);
+  async function runOrThrow(args: string[], label: string) {
+    const exitCode = await ffmpeg.exec(args);
+    if (exitCode !== 0) {
+      throw new Error(`${label} failed with ffmpeg exit code ${exitCode}`);
+    }
+  }
+
+  async function removeOutput() {
+    try {
+      await ffmpeg.deleteFile(outputName);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function runNormalizedEncode() {
+    const inputArgs = inputFiles.flatMap((name) => ['-i', name]);
+    const normalizedStreams = inputFiles
+      .map((_, i) => {
+        const video =
+          `[${i}:v]scale=720:1280:force_original_aspect_ratio=decrease,` +
+          'pad=720:1280:(ow-iw)/2:(oh-ih)/2,' +
+          `setsar=1,fps=30,setpts=PTS-STARTPTS[v${i}]`;
+        const audio = `[${i}:a]aresample=48000,asetpts=PTS-STARTPTS[a${i}]`;
+        return `${video};${audio}`;
+      })
+      .join(';');
+    const concatInputs = inputFiles.map((_, i) => `[v${i}][a${i}]`).join('');
+    const filterComplex = `${normalizedStreams};${concatInputs}concat=n=${inputFiles.length}:v=1:a=1[v][a]`;
+
+    await runOrThrow([
+      '-y',
+      ...inputArgs,
+      '-filter_complex',
+      filterComplex,
+      '-map',
+      '[v]',
+      '-map',
+      '[a]',
+      '-c:v',
+      'libvpx-vp9',
+      '-b:v',
+      '1.8M',
+      '-deadline',
+      'realtime',
+      '-cpu-used',
+      '6',
+      '-c:a',
+      'libopus',
+      '-b:a',
+      '96k',
+      '-shortest',
+      '-avoid_negative_ts',
+      'make_zero',
+      outputName,
+    ], 'Normalized concat');
+  }
+
+  async function runConcatDemuxerEncode() {
+    const listText = inputFiles.map((name) => `file '${name}'`).join('\n');
+    await ffmpeg.writeFile(listName, new TextEncoder().encode(listText));
+
+    await runOrThrow([
+      '-y',
+      '-fflags',
+      '+genpts',
+      '-f',
+      'concat',
+      '-safe',
+      '0',
+      '-i',
+      listName,
+      '-vf',
+      'scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30',
+      '-af',
+      'aresample=48000,asetpts=PTS-STARTPTS',
+      '-c:v',
+      'libvpx-vp9',
+      '-b:v',
+      '1.8M',
+      '-deadline',
+      'realtime',
+      '-cpu-used',
+      '6',
+      '-c:a',
+      'libopus',
+      '-b:a',
+      '96k',
+      '-avoid_negative_ts',
+      'make_zero',
+      outputName,
+    ], 'Fallback concat');
+  }
+
+  async function runCopyConcat() {
+    const listText = inputFiles.map((name) => `file '${name}'`).join('\n');
+    await ffmpeg.writeFile(listName, new TextEncoder().encode(listText));
+
+    await runOrThrow([
+      '-y',
+      '-fflags',
+      '+genpts',
+      '-f',
+      'concat',
+      '-safe',
+      '0',
+      '-i',
+      listName,
+      '-c',
+      'copy',
+      '-avoid_negative_ts',
+      'make_zero',
+      outputName,
+    ], 'Last-resort concat');
+  }
+
+  let lastError: unknown = null;
+  for (const strategy of [runNormalizedEncode, runConcatDemuxerEncode, runCopyConcat]) {
+    try {
+      await strategy();
+      lastError = null;
+      break;
+    } catch (err) {
+      lastError = err;
+      await removeOutput();
+    }
+  }
+
+  if (lastError) {
+    throw lastError instanceof Error ? lastError : new Error('Video stitching failed');
+  }
 
   const data = await ffmpeg.readFile(outputName);
   // ffmpeg.readFile returns string | Uint8Array; for a binary file it's Uint8Array.
@@ -141,6 +233,7 @@ export async function concatClips(
     }
   }
   try {
+    await ffmpeg.deleteFile(listName);
     await ffmpeg.deleteFile(outputName);
   } catch {
     /* ignore */

@@ -20,6 +20,16 @@ type Phase =
   | { kind: 'ready'; result: PublicSubmitResult }
   | { kind: 'error'; message: string };
 
+function pipelineErrorMessage(err: unknown) {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === 'string' && err.trim()) return err;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return 'Submit failed';
+  }
+}
+
 export default function PreviewPage() {
   const router = useRouter();
   const store = useRecordingStore();
@@ -77,9 +87,10 @@ export default function PreviewPage() {
 
       setPhase({ kind: 'polling', result });
     } catch (err) {
+      console.error('[matcha-moments/preview] pipeline failed', err);
       setPhase({
         kind: 'error',
-        message: err instanceof Error ? err.message : 'Submit failed',
+        message: pipelineErrorMessage(err) || 'Submit failed',
       });
     }
   }, [router, store.orderedClips, store.slug, store.socialHandle, store.tableId]);

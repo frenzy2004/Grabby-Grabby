@@ -91,6 +91,7 @@ export type PublicSubmitResult = {
   feedback: string;
   reward?: { type?: ReviewRewardType; value?: string } | null;
   reasons?: string[];
+  previewUrl?: string;
   updatedAt: string;
 };
 

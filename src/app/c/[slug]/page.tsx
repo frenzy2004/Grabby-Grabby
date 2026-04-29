@@ -1,17 +1,15 @@
 import { notFound } from 'next/navigation';
 import { LandingClient } from './LandingClient';
-import { getCampaign } from '@/lib/humeoApi';
+import { getCampaignBySlug } from '@/lib/server/reviewStore';
 
 type PageProps = {
   params: { slug: string };
   searchParams: { t?: string };
 };
 
-export default async function CafeLandingPage({ params, searchParams }: PageProps) {
-  let campaign;
-  try {
-    campaign = await getCampaign(params.slug);
-  } catch {
+export default function CafeLandingPage({ params, searchParams }: PageProps) {
+  const campaign = getCampaignBySlug(params.slug);
+  if (!campaign) {
     notFound();
   }
 

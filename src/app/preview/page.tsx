@@ -1,15 +1,15 @@
 'use client';
 
-import { Loader2, Play, RotateCcw } from 'lucide-react';
+import { CheckCircle2, Loader2, RotateCcw } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/Button';
 import { RenderShimmer } from '@/components/RenderShimmer';
+import { useSubmissionPolling } from '@/hooks/useSubmissionPolling';
 import { concatClips } from '@/lib/ffmpeg';
 import { submit } from '@/lib/humeoApi';
 import { recordingStore, useRecordingStore } from '@/lib/recordingStore';
 import type { PublicSubmitResult } from '@/lib/reviews/types';
-import { useSubmissionPolling } from '@/hooks/useSubmissionPolling';
 import { ensureDeviceKey } from '@/lib/utils';
 
 type Phase =
@@ -29,12 +29,8 @@ export default function PreviewPage() {
   const submissionId =
     phase.kind === 'polling' || phase.kind === 'ready' ? phase.result.submissionId : null;
 
-  const { result: pollResult } = useSubmissionPolling(
-    submissionId,
-    store.slug,
-  );
+  const { result: pollResult } = useSubmissionPolling(submissionId, store.slug, 1500);
 
-  // Bridge polling results back into our local phase state.
   useEffect(() => {
     if (!pollResult) return;
     if (pollResult.status === 'reward_issued' || pollResult.decision === 'pass') {
@@ -52,64 +48,52 @@ export default function PreviewPage() {
     }
   }, [pollResult]);
 
-  // Kick off the submit pipeline once on mount.
-  useEffect(() => {
-    if (triggeredRef.current) return;
+  const runPipeline = useCallback(async () => {
     if (store.orderedClips.length === 0) {
-      // No clips — user navigated straight here. Send them home.
       router.replace('/');
       return;
     }
+
+    try {
+      setPhase({ kind: 'concatenating', progress: 0 });
+
+      const concat = await concatClips(
+        store.orderedClips.map((clip) => ({ blob: clip.blob, ext: clip.ext })),
+        (progress) => setPhase({ kind: 'concatenating', progress }),
+      );
+
+      setPhase({ kind: 'uploading' });
+
+      const result = await submit({
+        slug: store.slug ?? 'sageandstone',
+        consentAccepted: true,
+        socialHandle: store.socialHandle || undefined,
+        deviceKey: ensureDeviceKey(),
+        tableId: store.tableId,
+        durationSeconds: concat.durationSeconds,
+        video: concat.blob,
+        videoFileName: concat.filename,
+      });
+
+      setPhase({ kind: 'polling', result });
+    } catch (err) {
+      setPhase({
+        kind: 'error',
+        message: err instanceof Error ? err.message : 'Submit failed',
+      });
+    }
+  }, [router, store.orderedClips, store.slug, store.socialHandle, store.tableId]);
+
+  useEffect(() => {
+    if (triggeredRef.current) return;
     triggeredRef.current = true;
-
-    void (async () => {
-      try {
-        setPhase({ kind: 'concatenating', progress: 0 });
-
-        const concat = await concatClips(
-          store.orderedClips.map((c) => ({ blob: c.blob, ext: c.ext })),
-          (p) => setPhase({ kind: 'concatenating', progress: p }),
-        );
-
-        setPhase({ kind: 'uploading' });
-
-        const result = await submit({
-          slug: store.slug ?? 'sageandstone',
-          consentAccepted: true,
-          socialHandle: store.socialHandle || undefined,
-          deviceKey: ensureDeviceKey(),
-          tableId: store.tableId,
-          durationSeconds: concat.durationSeconds,
-          video: concat.blob,
-          videoFileName: concat.filename,
-        });
-
-        setPhase({ kind: 'polling', result });
-      } catch (err) {
-        setPhase({
-          kind: 'error',
-          message: err instanceof Error ? err.message : 'Submit failed',
-        });
-      }
-    })();
+    void runPipeline();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const isReady = phase.kind === 'ready';
-
-  const renderSteps = useMemo(
-    () => [
-      { label: 'Stitching clips', done: phase.kind !== 'concatenating' },
-      { label: 'Uploading', done: phase.kind === 'polling' || phase.kind === 'ready' },
-      {
-        label: 'Generating subtitles',
-        done: isReady,
-        current: phase.kind === 'polling',
-      },
-      { label: 'Final polish', done: isReady, pending: !isReady },
-    ],
-    [isReady, phase.kind],
-  );
+  const handleRetry = () => {
+    void runPipeline();
+  };
 
   const handleSubmitFinal = () => {
     if (phase.kind === 'ready') {
@@ -122,134 +106,151 @@ export default function PreviewPage() {
     router.replace(`/c/${encodeURIComponent(store.slug ?? 'sageandstone')}/record`);
   };
 
+  const isReady = phase.kind === 'ready';
+
+  const renderSteps = useMemo(
+    () => [
+      {
+        label: 'Stitching recorded clips',
+        done: phase.kind !== 'concatenating',
+        current: phase.kind === 'concatenating',
+      },
+      {
+        label: 'Saving the video',
+        done: phase.kind === 'polling' || phase.kind === 'ready',
+        current: phase.kind === 'uploading',
+      },
+      {
+        label: 'Checking the submission',
+        done: isReady,
+        current: phase.kind === 'polling',
+      },
+      {
+        label: 'Matcha code',
+        done: isReady,
+        current: false,
+      },
+    ],
+    [isReady, phase.kind],
+  );
+
   return (
     <main className="flex min-h-dvh flex-col bg-cream">
-      <section className="flex-1 px-7 pt-6">
-        <div className="mb-5">
+      <section className="flex flex-1 flex-col px-7 pt-8">
+        <div className="mb-6">
           {isReady ? (
             <>
-              <div className="text-eyebrow mb-3 text-matcha">your video — ready</div>
-              <h1 className="text-display text-[30px] text-ink">
-                Looking <em className="text-matcha">delicious.</em>
+              <div className="text-eyebrow mb-3 text-matcha">approved</div>
+              <h1 className="text-display text-[32px] text-ink">
+                Your review is <em className="text-matcha">saved.</em>
               </h1>
             </>
           ) : (
             <>
-              <div className="text-eyebrow mb-3 text-matcha">rendering · please wait</div>
-              <h1 className="text-display text-[30px] text-ink">
-                Putting it
+              <div className="text-eyebrow mb-3 text-matcha">processing</div>
+              <h1 className="text-display text-[32px] text-ink">
+                Saving your
                 <br />
-                <em className="text-matcha">together.</em>
+                <em className="text-matcha">matcha moment.</em>
               </h1>
             </>
           )}
         </div>
 
-        <div
-          className="relative mb-4 aspect-[9/16] max-h-[380px] overflow-hidden rounded-[22px] shadow-[0_20px_50px_rgba(0,0,0,0.2)]"
-          style={{
-            background:
-              'linear-gradient(180deg, transparent 50%, rgba(0,0,0,0.7)), radial-gradient(ellipse at 50% 50%, #d88845 0%, #6e3818 100%)',
-          }}
-        >
-          <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[100px] drop-shadow-[0_8px_20px_rgba(0,0,0,0.5)]">
-            🥗
-          </span>
+        <div className="rounded-[22px] border border-ink/10 bg-paper p-5 shadow-[0_18px_50px_rgba(42,37,32,0.12)]">
+          <div className="relative mb-5 flex aspect-[9/12] max-h-[420px] items-center justify-center overflow-hidden rounded-[18px] bg-[#15120f]">
+            {!isReady ? (
+              <div className="flex flex-col items-center px-5 text-center">
+                <RenderShimmer />
+                <p className="relative z-10 mt-4 max-w-[240px] text-sm leading-6 text-cream/75">
+                  The office prototype is saving your stitched recording and preparing the reward.
+                </p>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center px-5 text-center">
+                <CheckCircle2 className="h-16 w-16 text-sage" />
+                <p className="mt-5 max-w-[240px] text-sm leading-6 text-cream/80">
+                  Saved locally for the team to review in the internal dashboard.
+                </p>
+              </div>
+            )}
+          </div>
 
-          {!isReady ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 px-6 backdrop-blur-sm">
-              <RenderShimmer />
-              <ul className="relative z-10 flex w-full max-w-[240px] flex-col gap-2.5">
-                {renderSteps.map((step, i) => (
-                  <li
-                    key={i}
-                    className={`flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-[13px] text-cream/90 ${
-                      step.pending ? 'opacity-45' : ''
-                    }`}
-                  >
-                    <span
-                      className={`flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold ${
-                        step.done
-                          ? 'bg-matcha text-cream'
-                          : step.current
-                          ? 'animate-spin border-2 border-matcha border-t-transparent'
-                          : 'bg-cream-deep text-muted'
-                      }`}
-                    >
-                      {step.done ? '✓' : step.current ? '' : '·'}
-                    </span>
-                    {step.label}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : (
-            <>
-              <button
-                type="button"
-                className="absolute left-1/2 top-1/2 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-ink"
-                aria-label="Play preview"
+          <ul className="flex flex-col gap-2.5">
+            {renderSteps.map((step) => (
+              <li
+                key={step.label}
+                className="flex items-center gap-3 rounded-xl border border-ink/10 bg-cream px-3.5 py-3 text-[13px] text-ink/75"
               >
-                <Play className="ml-1 h-6 w-6" fill="currentColor" />
-              </button>
-              <div className="absolute bottom-[60px] left-4 right-4 rounded-md bg-white/95 px-3.5 py-2.5 text-center text-sm font-bold text-ink shadow">
-                &ldquo;The miso eggplant — <span className="bg-sage px-1">unreal</span> 🤤&rdquo;
-              </div>
-              <div className="absolute bottom-3.5 left-4 right-4 flex items-center gap-2.5 font-mono text-[10px] text-white">
-                <span>0:14</span>
-                <div className="flex-1 overflow-hidden rounded-full bg-white/30">
-                  <div className="h-[3px] w-[35%] bg-white" />
-                </div>
-                <span>0:42</span>
-              </div>
-            </>
-          )}
+                <span
+                  className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
+                    step.done
+                      ? 'bg-matcha text-cream'
+                      : step.current
+                        ? 'animate-spin border-2 border-matcha border-t-transparent'
+                        : 'bg-cream-deep text-muted'
+                  }`}
+                >
+                  {step.done ? 'OK' : step.current ? '' : '-'}
+                </span>
+                <span>{step.label}</span>
+              </li>
+            ))}
+          </ul>
+
+          {phase.kind === 'concatenating' ? (
+            <p className="mt-4 text-center font-mono text-[10px] uppercase tracking-[0.15em] text-muted">
+              Stitching clips - {Math.round(phase.progress * 100)}%
+            </p>
+          ) : null}
+
+          {phase.kind === 'uploading' ? (
+            <p className="mt-4 flex items-center justify-center gap-2 text-center font-mono text-[10px] uppercase tracking-[0.15em] text-muted">
+              <Loader2 className="h-3 w-3 animate-spin" /> Saving recording
+            </p>
+          ) : null}
+
+          {phase.kind === 'error' ? (
+            <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+              {phase.message}
+            </div>
+          ) : null}
         </div>
 
         {isReady ? (
-          <div className="mb-2 flex flex-wrap gap-2">
+          <div className="mt-4 flex flex-wrap gap-2">
             <span className="rounded-full border border-ink/10 bg-paper px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-ink">
               {store.orderedClips.length} clips
             </span>
             <span className="rounded-full border border-ink/10 bg-paper px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-ink">
-              subtitles on
+              saved locally
             </span>
             <span className="rounded-full border border-ink/10 bg-paper px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-ink">
-              9:16 vertical
+              reward ready
             </span>
-          </div>
-        ) : null}
-
-        {phase.kind === 'concatenating' ? (
-          <p className="mt-3 text-center font-mono text-[10px] uppercase tracking-[0.15em] text-muted">
-            Stitching clips · {Math.round(phase.progress * 100)}%
-          </p>
-        ) : null}
-
-        {phase.kind === 'uploading' ? (
-          <p className="mt-3 flex items-center justify-center gap-2 text-center font-mono text-[10px] uppercase tracking-[0.15em] text-muted">
-            <Loader2 className="h-3 w-3 animate-spin" /> Uploading to Humeo
-          </p>
-        ) : null}
-
-        {phase.kind === 'error' ? (
-          <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
-            {phase.message}
           </div>
         ) : null}
       </section>
 
-      <footer className="flex flex-col gap-2.5 px-7 pb-6 pt-2">
+      <footer className="flex flex-col gap-2.5 px-7 pb-6 pt-4">
         {isReady ? (
           <>
-            <Button onClick={handleSubmitFinal}>Submit &amp; get my matcha</Button>
+            <Button onClick={handleSubmitFinal}>Reveal matcha code</Button>
+            <Button variant="secondary" onClick={handleRerecord}>
+              <RotateCcw className="h-4 w-4" />
+              Re-record clips
+            </Button>
+          </>
+        ) : phase.kind === 'error' ? (
+          <>
+            <Button onClick={handleRetry}>Try again</Button>
             <Button variant="secondary" onClick={handleRerecord}>
               <RotateCcw className="h-4 w-4" />
               Re-record clips
             </Button>
           </>
         ) : (
-          <Button disabled>Submit (rendering…)</Button>
+          <Button disabled>Processing...</Button>
         )}
       </footer>
     </main>

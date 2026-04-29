@@ -37,3 +37,7 @@ next-env.d.ts
 
 # Reference Humeo codebase — read-only library, never push to matcha-moments remote
 reference/
+reference-2/
+
+# Local office prototype uploads and submission metadata
+.local-review-data/

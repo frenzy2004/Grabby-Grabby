@@ -15,14 +15,17 @@ type Props = {
 
 export function LandingClient({ slug, tableId, campaign }: Props) {
   const router = useRouter();
-  const [consentAccepted, setConsentAccepted] = useState(true);
+  const [consentAccepted, setConsentAccepted] = useState(false);
 
   useEffect(() => {
     recordingStore.setMeta({ slug, tableId });
   }, [slug, tableId]);
 
   const handleStart = () => {
-    router.push(`/c/${encodeURIComponent(slug)}/record`);
+    if (!consentAccepted) return;
+    window.sessionStorage.setItem(`matcha-moments-consent:${slug}`, 'true');
+    const tableQuery = tableId ? `?t=${encodeURIComponent(tableId)}` : '';
+    router.push(`/c/${encodeURIComponent(slug)}/record${tableQuery}`);
   };
 
   return (
@@ -46,9 +49,17 @@ export function LandingClient({ slug, tableId, campaign }: Props) {
           We&apos;ll guide you through a quick video review &mdash; and do all the editing for you.
         </p>
 
-        <p className="mt-6 max-w-[320px] px-2 text-[11px] leading-[1.5] text-ink/55">
-          By tapping below, you allow {campaign.restaurantName} to use your video on social media. Your phone will ask for camera access.
-        </p>
+        <label className="mt-6 flex max-w-[320px] cursor-pointer items-start gap-3 rounded-2xl border border-ink/10 bg-paper px-4 py-3 text-left">
+          <input
+            type="checkbox"
+            checked={consentAccepted}
+            onChange={(event) => setConsentAccepted(event.target.checked)}
+            className="mt-0.5 h-4 w-4 accent-matcha"
+          />
+          <span className="text-[11px] leading-[1.5] text-ink/65">
+            I allow {campaign.restaurantName} to review, edit, and use my video on social media.
+          </span>
+        </label>
       </section>
 
       <footer className="px-7 pb-6 pt-2">
@@ -60,8 +71,6 @@ export function LandingClient({ slug, tableId, campaign }: Props) {
             Table {tableId}
           </p>
         ) : null}
-        {/* unused setter to keep TS happy if we wire a real consent toggle later */}
-        <span className="hidden" onClick={() => setConsentAccepted((v) => v)} />
       </footer>
     </main>
   );

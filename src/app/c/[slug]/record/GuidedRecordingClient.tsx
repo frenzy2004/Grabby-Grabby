@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronLeft, RotateCcw } from 'lucide-react';
+import { ChevronLeft } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { ProgressPips } from '@/components/ProgressPips';
@@ -17,20 +17,34 @@ type Props = {
   campaign: PublicReviewCampaign;
 };
 
+type ClipReadyInput = {
+  blob: Blob;
+  durationSeconds: number;
+  ext: 'webm' | 'mp4' | 'mov';
+};
+
 export function GuidedRecordingClient({ slug, tableId, campaign }: Props) {
   const router = useRouter();
   const store = useRecordingStore();
   const totalSteps = campaign.prompts.length;
   const [stepNum, setStepNum] = useState(1);
+  const [hasConsent, setHasConsent] = useState(false);
 
   useEffect(() => {
     recordingStore.setMeta({ slug, tableId });
-  }, [slug, tableId]);
+    if (window.sessionStorage.getItem(`matcha-moments-consent:${slug}`) === 'true') {
+      setHasConsent(true);
+      return;
+    }
+
+    const tableQuery = tableId ? `?t=${encodeURIComponent(tableId)}` : '';
+    router.replace(`/c/${encodeURIComponent(slug)}${tableQuery}`);
+  }, [router, slug, tableId]);
 
   const currentPrompt = campaign.prompts[stepNum - 1];
 
   const handleClipReady = useCallback(
-    (clip: { blob: Blob; durationSeconds: number; ext: 'webm' | 'mp4' | 'mov' }) => {
+    (clip: ClipReadyInput) => {
       recordingStore.setClip({
         step: stepNum,
         blob: clip.blob,
@@ -39,7 +53,6 @@ export function GuidedRecordingClient({ slug, tableId, campaign }: Props) {
       });
 
       if (stepNum < totalSteps) {
-        // Tiny delay so the user sees the "finalizing" beat.
         window.setTimeout(() => setStepNum((s) => s + 1), 250);
       } else {
         window.setTimeout(() => router.push('/preview'), 250);
@@ -48,14 +61,13 @@ export function GuidedRecordingClient({ slug, tableId, campaign }: Props) {
     [router, stepNum, totalSteps],
   );
 
-  if (!currentPrompt) {
+  if (!hasConsent || !currentPrompt) {
     return null;
   }
 
   return (
     <RecorderInner
       key={`${currentPrompt.step}-${currentPrompt.camera}`}
-      campaign={campaign}
       stepNum={stepNum}
       totalSteps={totalSteps}
       doneCount={Object.keys(store.clipsByStep).filter((k) => Number(k) < stepNum).length}
@@ -65,24 +77,17 @@ export function GuidedRecordingClient({ slug, tableId, campaign }: Props) {
         if (stepNum > 1) setStepNum((s) => s - 1);
         else router.back();
       }}
-      onSkip={() => {
-        // Skip forward without producing a clip — useful for demo purposes only.
-        if (stepNum < totalSteps) setStepNum((s) => s + 1);
-        else router.push('/preview');
-      }}
     />
   );
 }
 
 type InnerProps = {
-  campaign: PublicReviewCampaign;
   stepNum: number;
   totalSteps: number;
   doneCount: number;
   prompt: PublicReviewCampaign['prompts'][number];
-  onClipReady: (clip: { blob: Blob; durationSeconds: number; ext: 'webm' | 'mp4' | 'mov' }) => void;
+  onClipReady: (clip: ClipReadyInput) => void;
   onBack: () => void;
-  onSkip: () => void;
 };
 
 function RecorderInner({
@@ -92,7 +97,6 @@ function RecorderInner({
   prompt,
   onClipReady,
   onBack,
-  onSkip,
 }: InnerProps) {
   const {
     state,
@@ -157,7 +161,7 @@ function RecorderInner({
             </div>
           ) : null}
 
-          <div className="flex items-center justify-center gap-12">
+          <div className="flex items-center justify-center gap-10">
             <button
               type="button"
               onClick={onBack}
@@ -172,24 +176,7 @@ function RecorderInner({
               disabled={state === 'requesting_permission' || state === 'finalizing'}
               onClick={handleRecordPress}
             />
-
-            <button
-              type="button"
-              onClick={onSkip}
-              className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 backdrop-blur"
-              aria-label="Skip clip"
-            >
-              <RotateCcw className="h-5 w-5" />
-            </button>
           </div>
-
-          <button
-            type="button"
-            onClick={onSkip}
-            className="font-mono text-[10px] uppercase tracking-[0.05em] text-white/50"
-          >
-            Demo only · skip without recording →
-          </button>
         </div>
       </div>
     </main>

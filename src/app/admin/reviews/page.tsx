@@ -32,8 +32,8 @@ function statusClass(status: string) {
   return 'border-sky-300 bg-sky-50 text-sky-900';
 }
 
-export default function AdminReviewsPage() {
-  const submissions = listAdminReviewSubmissions();
+export default async function AdminReviewsPage() {
+  const submissions = await listAdminReviewSubmissions();
 
   return (
     <main className="min-h-dvh bg-[#171512] px-5 py-6 text-cream sm:px-8">

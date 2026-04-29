@@ -26,7 +26,7 @@ export async function GET(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: 'Missing campaign slug' }, { status: 400 });
   }
 
-  const result = getSubmission(params.submissionId, slug);
+  const result = await getSubmission(params.submissionId, slug);
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status });
   }

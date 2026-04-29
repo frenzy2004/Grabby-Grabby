@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { stat, writeFile } from 'fs/promises';
 import path from 'path';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type {
   PublicReviewCampaign,
   PublicSubmitResult,
@@ -9,12 +10,13 @@ import type {
 } from '@/lib/reviews/types';
 
 /**
- * Local review store for the office prototype.
+ * Review store for the standalone prototype.
  *
- * This intentionally mirrors the public review API shape from Humeo, but keeps
- * everything on this machine:
- *   .local-review-data/uploads/         saved stitched videos
- *   .local-review-data/submissions.json saved submission metadata
+ * Preferred mode: Supabase Storage
+ *   review-videos/videos/<submissionId>.<ext>
+ *   review-videos/submissions/<submissionId>.json
+ *
+ * Local file fallback remains available when Supabase env vars are absent.
  */
 
 export type LocalSubmission = {
@@ -35,6 +37,7 @@ export type LocalSubmission = {
   videoMime: string;
   videoFileName: string;
   storagePath: string;
+  storageBackend: 'local' | 'supabase';
   createdAt: number;
   updatedAt: string;
 };
@@ -50,9 +53,26 @@ type StoreState = {
   submissions: Map<string, LocalSubmission>;
 };
 
+type LocalVideoResult = {
+  kind: 'local';
+  submission: LocalSubmission;
+  filePath: string;
+  size: number;
+  contentType: string;
+};
+
+type RedirectVideoResult = {
+  kind: 'redirect';
+  submission: LocalSubmission;
+  redirectUrl: string;
+};
+
+export type SubmissionVideoResult = LocalVideoResult | RedirectVideoResult;
+
 const LOCAL_DATA_DIR = path.join(process.cwd(), '.local-review-data');
 const UPLOADS_DIR = path.join(LOCAL_DATA_DIR, 'uploads');
 const SUBMISSIONS_FILE = path.join(LOCAL_DATA_DIR, 'submissions.json');
+const DEFAULT_BUCKET = 'review-videos';
 
 const SAGE_AND_STONE: PublicReviewCampaign = {
   id: 'sage-and-stone-cafe',
@@ -110,6 +130,49 @@ const SAGE_AND_STONE: PublicReviewCampaign = {
   theme: 'cafe-cream',
 };
 
+let supabaseAdmin: SupabaseClient | null = null;
+let bucketReady = false;
+
+function hasSupabaseConfig() {
+  return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+}
+
+function getBucketName() {
+  return process.env.SUPABASE_REVIEW_VIDEO_BUCKET || DEFAULT_BUCKET;
+}
+
+function getSupabaseAdmin() {
+  if (!hasSupabaseConfig()) return null;
+  if (!supabaseAdmin) {
+    supabaseAdmin = createClient(
+      process.env.SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false,
+        },
+      },
+    );
+  }
+  return supabaseAdmin;
+}
+
+async function ensureSupabaseBucket(client: SupabaseClient) {
+  if (bucketReady) return;
+  const bucket = getBucketName();
+  const { data } = await client.storage.getBucket(bucket);
+  if (!data) {
+    const { error } = await client.storage.createBucket(bucket, {
+      public: false,
+    });
+    if (error && !error.message.toLowerCase().includes('already exists')) {
+      throw error;
+    }
+  }
+  bucketReady = true;
+}
+
 function ensureLocalDirs() {
   mkdirSync(UPLOADS_DIR, { recursive: true });
 }
@@ -140,13 +203,21 @@ function isLocalSubmission(value: unknown): value is LocalSubmission {
   );
 }
 
+function normalizeSubmission(value: LocalSubmission): LocalSubmission {
+  return {
+    ...value,
+    storageBackend: value.storageBackend ?? 'local',
+  };
+}
+
 function createState(): StoreState {
   const campaigns = new Map<string, PublicReviewCampaign>();
   campaigns.set(SAGE_AND_STONE.slug, SAGE_AND_STONE);
 
   const submissions = new Map<string, LocalSubmission>();
   for (const submission of readPersistedSubmissions()) {
-    submissions.set(submission.submissionId, submission);
+    const normalized = normalizeSubmission(submission);
+    submissions.set(normalized.submissionId, normalized);
   }
 
   return { campaigns, submissions };
@@ -161,15 +232,19 @@ state.campaigns.set(SAGE_AND_STONE.slug, SAGE_AND_STONE);
 for (const [id, submission] of state.submissions.entries()) {
   if (!isLocalSubmission(submission)) {
     state.submissions.delete(id);
+  } else {
+    state.submissions.set(id, normalizeSubmission(submission));
   }
 }
 if (process.env.NODE_ENV !== 'production') {
   globalForStore.__matchaReviewStore = state;
 }
 
-function persistSubmissions() {
+function persistLocalSubmissions() {
   ensureLocalDirs();
-  const submissions = [...state.submissions.values()].sort((a, b) => a.createdAt - b.createdAt);
+  const submissions = [...state.submissions.values()]
+    .filter((submission) => submission.storageBackend === 'local')
+    .sort((a, b) => a.createdAt - b.createdAt);
   writeFileSync(SUBMISSIONS_FILE, `${JSON.stringify(submissions, null, 2)}\n`, 'utf8');
 }
 
@@ -199,8 +274,16 @@ function buildPreviewUrl(submissionId: string) {
   return `/api/public/reviews/video/${encodeURIComponent(submissionId)}`;
 }
 
-function storagePathFor(submissionId: string, ext: string) {
+function localStoragePathFor(submissionId: string, ext: string) {
   return `uploads/${submissionId}.${ext}`;
+}
+
+function supabaseVideoPathFor(submissionId: string, ext: string) {
+  return `videos/${submissionId}.${ext}`;
+}
+
+function metadataPathFor(submissionId: string) {
+  return `submissions/${submissionId}.json`;
 }
 
 function absoluteStoragePath(storagePath: string) {
@@ -210,6 +293,77 @@ function absoluteStoragePath(storagePath: string) {
     return null;
   }
   return absolute;
+}
+
+function textFromDownloadedData(data: Blob | ArrayBuffer | Buffer | string) {
+  if (typeof data === 'string') return data;
+  if (data instanceof Blob) return data.text();
+  if (data instanceof ArrayBuffer) return Promise.resolve(Buffer.from(data).toString('utf8'));
+  return Promise.resolve(Buffer.from(data).toString('utf8'));
+}
+
+async function persistSupabaseSubmission(client: SupabaseClient, submission: LocalSubmission) {
+  await ensureSupabaseBucket(client);
+  const body = JSON.stringify(submission, null, 2);
+  const { error } = await client.storage
+    .from(getBucketName())
+    .upload(metadataPathFor(submission.submissionId), body, {
+      contentType: 'application/json',
+      upsert: true,
+    });
+  if (error) throw error;
+}
+
+async function loadSupabaseSubmission(
+  client: SupabaseClient,
+  submissionId: string,
+): Promise<LocalSubmission | null> {
+  await ensureSupabaseBucket(client);
+  const { data, error } = await client.storage
+    .from(getBucketName())
+    .download(metadataPathFor(submissionId));
+  if (error || !data) return null;
+
+  try {
+    const text = await textFromDownloadedData(data);
+    const parsed = JSON.parse(text) as unknown;
+    if (!isLocalSubmission(parsed)) return null;
+    return normalizeSubmission(parsed);
+  } catch {
+    return null;
+  }
+}
+
+async function listSupabaseSubmissions(client: SupabaseClient) {
+  await ensureSupabaseBucket(client);
+  const { data, error } = await client.storage
+    .from(getBucketName())
+    .list('submissions', {
+      limit: 200,
+      sortBy: { column: 'created_at', order: 'desc' },
+    });
+  if (error || !data) return [];
+
+  const submissions = await Promise.all(
+    data
+      .filter((item) => item.name.endsWith('.json'))
+      .map((item) => loadSupabaseSubmission(client, item.name.replace(/\.json$/, ''))),
+  );
+
+  return submissions.filter((submission): submission is LocalSubmission => Boolean(submission));
+}
+
+async function persistSubmission(submission: LocalSubmission) {
+  state.submissions.set(submission.submissionId, submission);
+
+  if (submission.storageBackend === 'supabase') {
+    const client = getSupabaseAdmin();
+    if (!client) throw new Error('Supabase is not configured');
+    await persistSupabaseSubmission(client, submission);
+    return;
+  }
+
+  persistLocalSubmissions();
 }
 
 function advanceSubmission(submission: LocalSubmission) {
@@ -293,15 +447,34 @@ export async function createSubmission(input: CreateSubmissionInput):
   const videoMime = input.video.type || 'video/webm';
   const videoFileName = input.video.name || 'matcha-moments.webm';
   const ext = resolveVideoExt(videoFileName, videoMime);
-  const storagePath = storagePathFor(submissionId, ext);
-  const absolutePath = absoluteStoragePath(storagePath);
-  if (!absolutePath) {
-    return { ok: false, status: 500, error: 'Invalid local storage path' };
-  }
-
-  ensureLocalDirs();
   const bytes = Buffer.from(await input.video.arrayBuffer());
-  await writeFile(absolutePath, bytes);
+  const storageBackend = hasSupabaseConfig() ? 'supabase' : 'local';
+  const storagePath =
+    storageBackend === 'supabase'
+      ? supabaseVideoPathFor(submissionId, ext)
+      : localStoragePathFor(submissionId, ext);
+
+  if (storageBackend === 'supabase') {
+    const client = getSupabaseAdmin();
+    if (!client) {
+      return { ok: false, status: 500, error: 'Supabase is not configured' };
+    }
+    await ensureSupabaseBucket(client);
+    const { error } = await client.storage.from(getBucketName()).upload(storagePath, bytes, {
+      contentType: videoMime,
+      upsert: false,
+    });
+    if (error) {
+      return { ok: false, status: 500, error: `Video upload failed: ${error.message}` };
+    }
+  } else {
+    const absolutePath = absoluteStoragePath(storagePath);
+    if (!absolutePath) {
+      return { ok: false, status: 500, error: 'Invalid local storage path' };
+    }
+    ensureLocalDirs();
+    await writeFile(absolutePath, bytes);
+  }
 
   const now = new Date().toISOString();
   const submission: LocalSubmission = {
@@ -322,45 +495,61 @@ export async function createSubmission(input: CreateSubmissionInput):
     videoMime,
     videoFileName,
     storagePath,
+    storageBackend,
     createdAt: Date.now(),
     updatedAt: now,
   };
 
-  state.submissions.set(submissionId, submission);
-  persistSubmissions();
+  await persistSubmission(submission);
 
   return { ok: true, submission };
 }
 
-export function getSubmission(
+export async function getSubmission(
   submissionId: string,
   slug: string,
-):
+): Promise<
   | { ok: true; submission: LocalSubmission }
-  | { ok: false; status: number; error: string } {
+  | { ok: false; status: number; error: string }
+> {
   const campaign = getCampaignBySlug(slug);
   if (!campaign) return { ok: false, status: 404, error: 'Campaign not found' };
 
-  const submission = state.submissions.get(submissionId);
+  const client = getSupabaseAdmin();
+  const submission = client
+    ? await loadSupabaseSubmission(client, submissionId)
+    : state.submissions.get(submissionId);
+
   if (!submission || submission.campaignSlug !== slug) {
     return { ok: false, status: 404, error: 'Submission not found' };
   }
 
   if (advanceSubmission(submission)) {
-    persistSubmissions();
+    await persistSubmission(submission);
+  } else {
+    state.submissions.set(submission.submissionId, submission);
   }
 
   return { ok: true, submission };
 }
 
-export function listAdminReviewSubmissions(): AdminReviewSubmission[] {
-  let changed = false;
-  for (const submission of state.submissions.values()) {
-    changed = advanceSubmission(submission) || changed;
-  }
-  if (changed) persistSubmissions();
+export async function listAdminReviewSubmissions(): Promise<AdminReviewSubmission[]> {
+  const client = getSupabaseAdmin();
+  const sourceSubmissions = client
+    ? await listSupabaseSubmissions(client)
+    : [...state.submissions.values()];
 
-  return [...state.submissions.values()]
+  const submissions: LocalSubmission[] = [];
+  for (const submission of sourceSubmissions) {
+    if (advanceSubmission(submission)) {
+      await persistSubmission(submission);
+    } else {
+      state.submissions.set(submission.submissionId, submission);
+    }
+    submissions.push(submission);
+  }
+
+  return submissions
     .sort((a, b) => b.createdAt - a.createdAt)
     .map((submission) => ({
       ...submission,
@@ -370,9 +559,28 @@ export function listAdminReviewSubmissions(): AdminReviewSubmission[] {
     }));
 }
 
-export async function getSubmissionVideo(submissionId: string) {
-  const submission = state.submissions.get(submissionId);
+export async function getSubmissionVideo(
+  submissionId: string,
+): Promise<SubmissionVideoResult | null> {
+  const client = getSupabaseAdmin();
+  const submission = client
+    ? await loadSupabaseSubmission(client, submissionId)
+    : state.submissions.get(submissionId);
+
   if (!submission) return null;
+
+  if (submission.storageBackend === 'supabase') {
+    if (!client) return null;
+    const { data, error } = await client.storage
+      .from(getBucketName())
+      .createSignedUrl(submission.storagePath, 10 * 60);
+    if (error || !data?.signedUrl) return null;
+    return {
+      kind: 'redirect',
+      submission,
+      redirectUrl: data.signedUrl,
+    };
+  }
 
   const filePath = absoluteStoragePath(submission.storagePath);
   if (!filePath) return null;
@@ -381,6 +589,7 @@ export async function getSubmissionVideo(submissionId: string) {
     const fileStat = await stat(filePath);
     if (!fileStat.isFile()) return null;
     return {
+      kind: 'local',
       submission,
       filePath,
       size: fileStat.size,

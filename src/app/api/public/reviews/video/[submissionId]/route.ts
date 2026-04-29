@@ -39,6 +39,10 @@ export async function GET(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: 'Video not found' }, { status: 404 });
   }
 
+  if (video.kind === 'redirect') {
+    return NextResponse.redirect(video.redirectUrl, 302);
+  }
+
   const range = parseRange(req.headers.get('range'), video.size);
 
   if (range?.invalid) {

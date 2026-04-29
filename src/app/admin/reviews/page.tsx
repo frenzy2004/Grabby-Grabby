@@ -32,6 +32,23 @@ function statusClass(status: string) {
   return 'border-sky-300 bg-sky-50 text-sky-900';
 }
 
+function PhoneVideoPreview({ src }: { src: string }) {
+  return (
+    <div className="mx-auto w-full max-w-[170px] rounded-[26px] border border-cream/10 bg-[#090806] p-2 shadow-[0_18px_45px_rgba(0,0,0,0.34)]">
+      <div className="relative overflow-hidden rounded-[20px] bg-black">
+        <div className="pointer-events-none absolute left-1/2 top-2 z-10 h-1 w-10 -translate-x-1/2 rounded-full bg-cream/20" />
+        <video
+          controls
+          playsInline
+          preload="metadata"
+          src={src}
+          className="aspect-[9/16] w-full bg-black object-cover"
+        />
+      </div>
+    </div>
+  );
+}
+
 export default async function AdminReviewsPage() {
   const submissions = await listAdminReviewSubmissions();
 
@@ -66,15 +83,7 @@ export default async function AdminReviewsPage() {
                 className="overflow-hidden rounded-lg border border-cream/10 bg-[#211d18]"
               >
                 <div className="grid gap-4 p-4 sm:grid-cols-[180px_1fr]">
-                  <div className="overflow-hidden rounded-md bg-black">
-                    <video
-                      controls
-                      playsInline
-                      preload="metadata"
-                      src={submission.previewUrl}
-                      className="aspect-[9/16] h-full max-h-[320px] w-full object-contain"
-                    />
-                  </div>
+                  <PhoneVideoPreview src={submission.previewUrl} />
 
                   <div className="flex min-w-0 flex-col gap-3">
                     <div className="flex flex-wrap items-center gap-2">

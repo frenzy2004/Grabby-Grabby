@@ -34,17 +34,14 @@ function statusClass(status: string) {
 
 function PhoneVideoPreview({ src }: { src: string }) {
   return (
-    <div className="mx-auto w-full max-w-[170px] rounded-[26px] border border-cream/10 bg-[#090806] p-2 shadow-[0_18px_45px_rgba(0,0,0,0.34)]">
-      <div className="relative overflow-hidden rounded-[20px] bg-black">
-        <div className="pointer-events-none absolute left-1/2 top-2 z-10 h-1 w-10 -translate-x-1/2 rounded-full bg-cream/20" />
-        <video
-          controls
-          playsInline
-          preload="metadata"
-          src={src}
-          className="aspect-[9/16] w-full bg-black object-contain"
-        />
-      </div>
+    <div className="mx-auto w-full max-w-[170px] overflow-hidden rounded-[18px] bg-black shadow-[0_18px_45px_rgba(0,0,0,0.28)]">
+      <video
+        controls
+        playsInline
+        preload="metadata"
+        src={src}
+        className="aspect-[9/16] w-full bg-black object-cover"
+      />
     </div>
   );
 }

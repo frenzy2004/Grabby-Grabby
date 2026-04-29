@@ -171,8 +171,7 @@ export default function PreviewPage() {
         </div>
 
         <div className="rounded-[22px] border border-ink/10 bg-paper p-5 shadow-[0_18px_50px_rgba(42,37,32,0.12)]">
-          <div className="relative mx-auto mb-5 flex aspect-[9/16] max-h-[460px] w-full max-w-[260px] items-center justify-center overflow-hidden rounded-[28px] border-[8px] border-[#16120f] bg-[#15120f] shadow-[0_18px_45px_rgba(42,37,32,0.18)]">
-            <div className="pointer-events-none absolute left-1/2 top-2 z-10 h-1 w-10 -translate-x-1/2 rounded-full bg-cream/20" />
+          <div className="relative mx-auto mb-5 flex aspect-[9/16] max-h-[460px] w-full max-w-[260px] items-center justify-center overflow-hidden rounded-[22px] bg-[#15120f] shadow-[0_18px_45px_rgba(42,37,32,0.14)]">
             {!isReady ? (
               <div className="flex flex-col items-center px-5 text-center">
                 <RenderShimmer />

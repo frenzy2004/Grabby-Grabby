@@ -45,11 +45,11 @@ body {
     align-items: center;
     justify-content: center;
     padding: 24px;
-    background: #EDE3D0;
+    background: #F5EFE2;
   }
 
   .phone-stage-dark {
-    background: #15120f;
+    background: #0e0d0b;
   }
 
   .phone-screen {
@@ -58,23 +58,8 @@ body {
     min-height: 0;
     width: min(430px, calc(100vw - 48px));
     overflow: hidden;
-    border: 10px solid #12100d;
-    border-radius: 42px;
-    box-shadow: 0 30px 90px rgba(42, 37, 32, 0.32);
-  }
-
-  .phone-screen::before {
-    content: '';
-    position: absolute;
-    left: 50%;
-    top: 10px;
-    z-index: 50;
-    width: 74px;
-    height: 5px;
-    transform: translateX(-50%);
-    border-radius: 999px;
-    background: rgba(255, 252, 246, 0.28);
-    pointer-events: none;
+    border-radius: 28px;
+    box-shadow: 0 24px 70px rgba(42, 37, 32, 0.18);
   }
 
   .phone-screen > main {

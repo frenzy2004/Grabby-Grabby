@@ -72,6 +72,7 @@ export type SubmissionVideoResult = LocalVideoResult | RedirectVideoResult;
 const LOCAL_DATA_DIR = path.join(process.cwd(), '.local-review-data');
 const UPLOADS_DIR = path.join(LOCAL_DATA_DIR, 'uploads');
 const SUBMISSIONS_FILE = path.join(LOCAL_DATA_DIR, 'submissions.json');
+const ENV_FILE = path.join(process.cwd(), '.env.local');
 const DEFAULT_BUCKET = 'review-videos';
 
 const SAGE_AND_STONE: PublicReviewCampaign = {
@@ -132,28 +133,58 @@ const SAGE_AND_STONE: PublicReviewCampaign = {
 
 let supabaseAdmin: SupabaseClient | null = null;
 let bucketReady = false;
+let envFileCache: Record<string, string> | null = null;
+
+function readEnvFile() {
+  if (envFileCache) return envFileCache;
+  envFileCache = {};
+
+  if (!existsSync(ENV_FILE)) return envFileCache;
+
+  try {
+    const raw = readFileSync(ENV_FILE, 'utf8');
+    for (const line of raw.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+
+      const splitAt = trimmed.indexOf('=');
+      if (splitAt <= 0) continue;
+
+      const key = trimmed.slice(0, splitAt).trim();
+      const value = trimmed.slice(splitAt + 1).trim();
+      envFileCache[key] = value.replace(/^['"]|['"]$/g, '');
+    }
+  } catch {
+    envFileCache = {};
+  }
+
+  return envFileCache;
+}
+
+function serverEnv(name: string) {
+  return process.env[name] || readEnvFile()[name] || '';
+}
 
 function hasSupabaseConfig() {
-  return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+  return Boolean(serverEnv('SUPABASE_URL') && serverEnv('SUPABASE_SERVICE_ROLE_KEY'));
 }
 
 function getBucketName() {
-  return process.env.SUPABASE_REVIEW_VIDEO_BUCKET || DEFAULT_BUCKET;
+  return serverEnv('SUPABASE_REVIEW_VIDEO_BUCKET') || DEFAULT_BUCKET;
 }
 
 function getSupabaseAdmin() {
   if (!hasSupabaseConfig()) return null;
   if (!supabaseAdmin) {
-    supabaseAdmin = createClient(
-      process.env.SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      {
-        auth: {
-          autoRefreshToken: false,
-          persistSession: false,
-        },
+    supabaseAdmin = createClient(serverEnv('SUPABASE_URL'), serverEnv('SUPABASE_SERVICE_ROLE_KEY'), {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
       },
-    );
+      global: {
+        fetch: (input, init) => fetch(input, { ...init, cache: 'no-store' }),
+      },
+    });
   }
   return supabaseAdmin;
 }
@@ -295,11 +326,27 @@ function absoluteStoragePath(storagePath: string) {
   return absolute;
 }
 
-function textFromDownloadedData(data: Blob | ArrayBuffer | Buffer | string) {
+async function textFromDownloadedData(data: unknown) {
   if (typeof data === 'string') return data;
-  if (data instanceof Blob) return data.text();
-  if (data instanceof ArrayBuffer) return Promise.resolve(Buffer.from(data).toString('utf8'));
-  return Promise.resolve(Buffer.from(data).toString('utf8'));
+
+  if (data && typeof data === 'object') {
+    const maybeBlob = data as {
+      text?: () => Promise<string>;
+      arrayBuffer?: () => Promise<ArrayBuffer>;
+    };
+
+    if (typeof maybeBlob.text === 'function') {
+      return maybeBlob.text();
+    }
+
+    if (typeof maybeBlob.arrayBuffer === 'function') {
+      return Buffer.from(await maybeBlob.arrayBuffer()).toString('utf8');
+    }
+  }
+
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString('utf8');
+  if (Buffer.isBuffer(data)) return data.toString('utf8');
+  throw new Error('Unsupported downloaded data type');
 }
 
 async function persistSupabaseSubmission(client: SupabaseClient, submission: LocalSubmission) {
@@ -322,14 +369,31 @@ async function loadSupabaseSubmission(
   const { data, error } = await client.storage
     .from(getBucketName())
     .download(metadataPathFor(submissionId));
-  if (error || !data) return null;
+  if (error || !data) {
+    if (error) {
+      console.warn('[matcha-moments/review-store] failed to download Supabase metadata', {
+        submissionId,
+        message: error.message,
+      });
+    }
+    return null;
+  }
 
   try {
     const text = await textFromDownloadedData(data);
     const parsed = JSON.parse(text) as unknown;
-    if (!isLocalSubmission(parsed)) return null;
+    if (!isLocalSubmission(parsed)) {
+      console.warn('[matcha-moments/review-store] invalid Supabase metadata', {
+        submissionId,
+      });
+      return null;
+    }
     return normalizeSubmission(parsed);
-  } catch {
+  } catch (err) {
+    console.warn('[matcha-moments/review-store] failed to parse Supabase metadata', {
+      submissionId,
+      message: err instanceof Error ? err.message : 'Unknown error',
+    });
     return null;
   }
 }
@@ -342,8 +406,12 @@ async function listSupabaseSubmissions(client: SupabaseClient) {
       limit: 200,
       sortBy: { column: 'created_at', order: 'desc' },
     });
-  if (error || !data) return [];
-
+  if (error || !data) {
+    if (error) {
+      console.warn('[matcha-moments/review-store] failed to list Supabase submissions', error);
+    }
+    return [];
+  }
   const submissions = await Promise.all(
     data
       .filter((item) => item.name.endsWith('.json'))
@@ -351,6 +419,16 @@ async function listSupabaseSubmissions(client: SupabaseClient) {
   );
 
   return submissions.filter((submission): submission is LocalSubmission => Boolean(submission));
+}
+
+function mergeSubmissions(...groups: LocalSubmission[][]) {
+  const merged = new Map<string, LocalSubmission>();
+  for (const group of groups) {
+    for (const submission of group) {
+      merged.set(submission.submissionId, normalizeSubmission(submission));
+    }
+  }
+  return [...merged.values()];
 }
 
 async function persistSubmission(submission: LocalSubmission) {
@@ -516,9 +594,9 @@ export async function getSubmission(
   if (!campaign) return { ok: false, status: 404, error: 'Campaign not found' };
 
   const client = getSupabaseAdmin();
-  const submission = client
-    ? await loadSupabaseSubmission(client, submissionId)
-    : state.submissions.get(submissionId);
+  const submission =
+    (client ? await loadSupabaseSubmission(client, submissionId) : null) ??
+    state.submissions.get(submissionId);
 
   if (!submission || submission.campaignSlug !== slug) {
     return { ok: false, status: 404, error: 'Submission not found' };
@@ -535,9 +613,11 @@ export async function getSubmission(
 
 export async function listAdminReviewSubmissions(): Promise<AdminReviewSubmission[]> {
   const client = getSupabaseAdmin();
-  const sourceSubmissions = client
-    ? await listSupabaseSubmissions(client)
-    : [...state.submissions.values()];
+  const supabaseSubmissions = client ? await listSupabaseSubmissions(client) : [];
+  const sourceSubmissions = mergeSubmissions(
+    [...state.submissions.values()],
+    supabaseSubmissions,
+  );
 
   const submissions: LocalSubmission[] = [];
   for (const submission of sourceSubmissions) {
@@ -563,9 +643,9 @@ export async function getSubmissionVideo(
   submissionId: string,
 ): Promise<SubmissionVideoResult | null> {
   const client = getSupabaseAdmin();
-  const submission = client
-    ? await loadSupabaseSubmission(client, submissionId)
-    : state.submissions.get(submissionId);
+  const submission =
+    (client ? await loadSupabaseSubmission(client, submissionId) : null) ??
+    state.submissions.get(submissionId);
 
   if (!submission) return null;
 

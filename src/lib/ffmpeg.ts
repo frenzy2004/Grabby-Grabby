@@ -16,23 +16,12 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile } from '@ffmpeg/util';
 
-let ffmpegSingleton: FFmpeg | null = null;
-let loadPromise: Promise<FFmpeg> | null = null;
-
-async function getFFmpeg(): Promise<FFmpeg> {
-  if (ffmpegSingleton) return ffmpegSingleton;
-  if (loadPromise) return loadPromise;
-
-  loadPromise = (async () => {
-    const ffmpeg = new FFmpeg();
-    // ffmpeg.wasm fetches its core from a CDN by default; for SharedArrayBuffer
-    // support we need the COOP/COEP headers set in next.config.js.
-    await ffmpeg.load();
-    ffmpegSingleton = ffmpeg;
-    return ffmpeg;
-  })();
-
-  return loadPromise;
+async function createFFmpeg(): Promise<FFmpeg> {
+  const ffmpeg = new FFmpeg();
+  // ffmpeg.wasm fetches its core from a CDN by default; for SharedArrayBuffer
+  // support we need the COOP/COEP headers set in next.config.js.
+  await ffmpeg.load();
+  return ffmpeg;
 }
 
 export type ConcatInput = {
@@ -63,11 +52,20 @@ export async function concatClips(
     throw new Error('No clips to concatenate');
   }
 
-  const ffmpeg = await getFFmpeg();
+  const ffmpeg = await createFFmpeg();
+  const logs: string[] = [];
 
-  if (onProgress) {
-    ffmpeg.on('progress', ({ progress }) => onProgress(Math.max(0, Math.min(1, progress))));
-  }
+  const logHandler = ({ message }: { message: string }) => {
+    const trimmed = message.trim();
+    if (trimmed) logs.push(trimmed);
+    if (logs.length > 80) logs.splice(0, logs.length - 80);
+  };
+  const progressHandler = ({ progress }: { progress: number }) => {
+    onProgress?.(Math.max(0, Math.min(1, progress)));
+  };
+
+  ffmpeg.on('log', logHandler);
+  ffmpeg.on('progress', progressHandler);
 
   const runId = Math.random().toString(36).slice(2, 8);
   const inputFiles: string[] = [];
@@ -83,9 +81,15 @@ export async function concatClips(
   const listName = `list-${runId}.txt`;
 
   async function runOrThrow(args: string[], label: string) {
+    logs.length = 0;
     const exitCode = await ffmpeg.exec(args);
     if (exitCode !== 0) {
-      throw new Error(`${label} failed with ffmpeg exit code ${exitCode}`);
+      const detail = logs.slice(-12).join(' | ');
+      throw new Error(
+        detail
+          ? `${label} failed with ffmpeg exit code ${exitCode}: ${detail}`
+          : `${label} failed with ffmpeg exit code ${exitCode}`,
+      );
     }
   }
 
@@ -97,52 +101,13 @@ export async function concatClips(
     }
   }
 
-  async function runNormalizedEncode() {
-    const inputArgs = inputFiles.flatMap((name) => ['-i', name]);
-    const normalizedStreams = inputFiles
-      .map((_, i) => {
-        const video =
-          `[${i}:v]scale=720:1280:force_original_aspect_ratio=decrease,` +
-          'pad=720:1280:(ow-iw)/2:(oh-ih)/2,' +
-          `setsar=1,fps=30,setpts=PTS-STARTPTS[v${i}]`;
-        const audio = `[${i}:a]aresample=48000,asetpts=PTS-STARTPTS[a${i}]`;
-        return `${video};${audio}`;
-      })
-      .join(';');
-    const concatInputs = inputFiles.map((_, i) => `[v${i}][a${i}]`).join('');
-    const filterComplex = `${normalizedStreams};${concatInputs}concat=n=${inputFiles.length}:v=1:a=1[v][a]`;
-
-    await runOrThrow([
-      '-y',
-      ...inputArgs,
-      '-filter_complex',
-      filterComplex,
-      '-map',
-      '[v]',
-      '-map',
-      '[a]',
-      '-c:v',
-      'libvpx-vp9',
-      '-b:v',
-      '1.8M',
-      '-deadline',
-      'realtime',
-      '-cpu-used',
-      '6',
-      '-c:a',
-      'libopus',
-      '-b:a',
-      '96k',
-      '-shortest',
-      '-avoid_negative_ts',
-      'make_zero',
-      outputName,
-    ], 'Normalized concat');
-  }
-
-  async function runConcatDemuxerEncode() {
+  async function writeConcatList() {
     const listText = inputFiles.map((name) => `file '${name}'`).join('\n');
     await ffmpeg.writeFile(listName, new TextEncoder().encode(listText));
+  }
+
+  async function runSmoothConcat() {
+    await writeConcatList();
 
     await runOrThrow([
       '-y',
@@ -155,11 +120,11 @@ export async function concatClips(
       '-i',
       listName,
       '-vf',
-      'scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30',
+      'setpts=PTS-STARTPTS,scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30',
       '-af',
-      'aresample=48000,asetpts=PTS-STARTPTS',
+      'aresample=async=1:first_pts=0',
       '-c:v',
-      'libvpx-vp9',
+      'libvpx',
       '-b:v',
       '1.8M',
       '-deadline',
@@ -173,17 +138,14 @@ export async function concatClips(
       '-avoid_negative_ts',
       'make_zero',
       outputName,
-    ], 'Fallback concat');
+    ], 'Smooth concat');
   }
 
   async function runCopyConcat() {
-    const listText = inputFiles.map((name) => `file '${name}'`).join('\n');
-    await ffmpeg.writeFile(listName, new TextEncoder().encode(listText));
+    await writeConcatList();
 
     await runOrThrow([
       '-y',
-      '-fflags',
-      '+genpts',
       '-f',
       'concat',
       '-safe',
@@ -195,11 +157,11 @@ export async function concatClips(
       '-avoid_negative_ts',
       'make_zero',
       outputName,
-    ], 'Last-resort concat');
+    ], 'Reliable concat');
   }
 
   let lastError: unknown = null;
-  for (const strategy of [runNormalizedEncode, runConcatDemuxerEncode, runCopyConcat]) {
+  for (const strategy of [runSmoothConcat, runCopyConcat]) {
     try {
       await strategy();
       lastError = null;
@@ -211,7 +173,7 @@ export async function concatClips(
   }
 
   if (lastError) {
-    throw lastError instanceof Error ? lastError : new Error('Video stitching failed');
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
   const data = await ffmpeg.readFile(outputName);
@@ -238,6 +200,9 @@ export async function concatClips(
   } catch {
     /* ignore */
   }
+  ffmpeg.off('log', logHandler);
+  ffmpeg.off('progress', progressHandler);
+  ffmpeg.terminate();
 
   // Probe duration via the same helper used elsewhere.
   const duration = await probeDuration(blob);

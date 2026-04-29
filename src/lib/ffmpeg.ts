@@ -6,7 +6,7 @@
  * in the browser before upload.
  *
  * Cost: ~8MB of WASM lazy-loaded after the customer finishes recording.
- * Performance: ~50 seconds of total video concatenates in 3-6s on a modern phone.
+ * Performance: ~50 seconds of total video concatenates in 5-10s on a modern phone.
  *
  * Future: if cafes complain about phone heat or battery, swap to multi-clip
  * upload + ffmpeg-on-server. The Humeo BE worker (processInterview.ts) already
@@ -50,9 +50,10 @@ export type ConcatResult = {
 /**
  * Concatenate an ordered list of recorded video Blobs into a single output blob.
  *
- * Strategy: write each input as inputN.<ext>, generate a concat list file,
- * run `ffmpeg -f concat -safe 0 -i list.txt -c copy out.webm`. If the `-c copy`
- * fast-path fails (codec mismatch between clips), retry with full re-encode.
+ * MediaRecorder WebM clips can carry timestamp offsets from the live preview
+ * stream. A fast stream-copy concat preserves those offsets, which can make the
+ * produced video freeze while the timestamp keeps moving. Decode every clip,
+ * reset audio/video PTS to zero, normalize to a vertical canvas, then concat.
  */
 export async function concatClips(
   inputs: ConcatInput[],
@@ -77,39 +78,49 @@ export async function concatClips(
     inputFiles.push(filename);
   }
 
-  const listText = inputFiles.map((name) => `file '${name}'`).join('\n');
-  await ffmpeg.writeFile('list.txt', new TextEncoder().encode(listText));
-
   const outputName = 'matcha-moments.webm';
+  const inputArgs = inputFiles.flatMap((name) => ['-i', name]);
+  const normalizedStreams = inputFiles
+    .map((_, i) => {
+      const video =
+        `[${i}:v]scale=720:1280:force_original_aspect_ratio=decrease,` +
+        'pad=720:1280:(ow-iw)/2:(oh-ih)/2,' +
+        `setsar=1,fps=30,setpts=PTS-STARTPTS[v${i}]`;
+      const audio =
+        `[${i}:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,` +
+        `asetpts=PTS-STARTPTS[a${i}]`;
+      return `${video};${audio}`;
+    })
+    .join(';');
+  const concatInputs = inputFiles.map((_, i) => `[v${i}][a${i}]`).join('');
+  const filterComplex = `${normalizedStreams};${concatInputs}concat=n=${inputFiles.length}:v=1:a=1[v][a]`;
 
-  let succeeded = false;
-  try {
-    // Fast path: stream-copy concat. Works when codecs match across clips.
-    await ffmpeg.exec([
-      '-f', 'concat',
-      '-safe', '0',
-      '-i', 'list.txt',
-      '-c', 'copy',
-      outputName,
-    ]);
-    succeeded = true;
-  } catch {
-    // Fall through to re-encode path.
-  }
-
-  if (!succeeded) {
-    // Re-encode path. Slower but tolerant of codec/format drift between clips.
-    await ffmpeg.exec([
-      '-f', 'concat',
-      '-safe', '0',
-      '-i', 'list.txt',
-      '-c:v', 'libvpx-vp9',
-      '-b:v', '1.5M',
-      '-c:a', 'libopus',
-      '-b:a', '128k',
-      outputName,
-    ]);
-  }
+  await ffmpeg.exec([
+    '-y',
+    ...inputArgs,
+    '-filter_complex',
+    filterComplex,
+    '-map',
+    '[v]',
+    '-map',
+    '[a]',
+    '-c:v',
+    'libvpx',
+    '-b:v',
+    '1.8M',
+    '-deadline',
+    'realtime',
+    '-cpu-used',
+    '5',
+    '-c:a',
+    'libopus',
+    '-b:a',
+    '96k',
+    '-shortest',
+    '-avoid_negative_ts',
+    'make_zero',
+    outputName,
+  ]);
 
   const data = await ffmpeg.readFile(outputName);
   // ffmpeg.readFile returns string | Uint8Array; for a binary file it's Uint8Array.
@@ -130,7 +141,6 @@ export async function concatClips(
     }
   }
   try {
-    await ffmpeg.deleteFile('list.txt');
     await ffmpeg.deleteFile(outputName);
   } catch {
     /* ignore */

@@ -122,6 +122,11 @@ export default function PreviewPage() {
           deviceKey: ensureDeviceKey(),
           tableId: store.tableId,
           sessionId: store.sessionId,
+          clips: clipsToUpload.map((clip) => ({
+            step: clip.step,
+            takeId: clip.takeId,
+            mediaType: clip.mediaType,
+          })),
         });
 
         setPhase({ kind: 'polling', result });

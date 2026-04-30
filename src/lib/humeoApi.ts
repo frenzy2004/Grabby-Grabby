@@ -85,6 +85,11 @@ export type SubmitSessionInput = Omit<
   'durationSeconds' | 'video' | 'videoFileName'
 > & {
   sessionId: string;
+  clips?: Array<{
+    step: number;
+    takeId: number;
+    mediaType: 'video' | 'audio';
+  }>;
 };
 
 export async function submit(input: SubmitInput): Promise<PublicSubmitResult> {
@@ -171,6 +176,14 @@ export async function submitSession(input: SubmitSessionInput): Promise<PublicSu
   form.append('deviceKey', input.deviceKey);
   form.append('sessionId', input.sessionId);
   if (input.tableId) form.append('tableId', input.tableId);
+  if (input.clips) {
+    form.append('clipCount', String(input.clips.length));
+    input.clips.forEach((clip, index) => {
+      form.append(`clipStep${index}`, String(clip.step));
+      form.append(`clipTakeId${index}`, String(clip.takeId));
+      form.append(`clipMediaType${index}`, clip.mediaType);
+    });
+  }
 
   const res = await fetch(endpoint('/api/public/reviews/submit-session'), {
     method: 'POST',

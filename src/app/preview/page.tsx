@@ -8,8 +8,7 @@ import { MobileShell } from '@/components/MobileShell';
 import { RenderShimmer } from '@/components/RenderShimmer';
 import { useSubmissionPolling } from '@/hooks/useSubmissionPolling';
 import { concatClips } from '@/lib/ffmpeg';
-import { submit } from '@/lib/humeoApi';
-import { optimizeNativeVideoClip } from '@/lib/nativeVideoOptimizer';
+import { submit, submitClips } from '@/lib/humeoApi';
 import { recordingStore, useRecordingStore } from '@/lib/recordingStore';
 import type { PublicSubmitResult } from '@/lib/reviews/types';
 import { ensureDeviceKey } from '@/lib/utils';
@@ -17,7 +16,7 @@ import { addVoiceoverToVideo } from '@/lib/voiceover';
 
 type Phase =
   | { kind: 'idle' }
-  | { kind: 'optimizing'; progress: number }
+  | { kind: 'server_processing' }
   | { kind: 'concatenating'; progress: number }
   | { kind: 'mixing'; progress: number }
   | { kind: 'uploading' }
@@ -73,42 +72,28 @@ export default function PreviewPage() {
     }
 
     try {
-      const nativeVideoCount = videoClips.filter((clip) => clip.needsOptimization).length;
-      const preparedVideoClips: Array<{ blob: Blob; ext: 'webm' | 'mp4' | 'mov' }> = [];
+      const shouldUseServerPipeline = videoClips.some((clip) => clip.needsOptimization);
 
-      if (nativeVideoCount > 0) {
-        setPhase({ kind: 'optimizing', progress: 0 });
-        let optimizedCount = 0;
+      if (shouldUseServerPipeline) {
+        setPhase({ kind: 'server_processing' });
+        const result = await submitClips({
+          slug: store.slug ?? 'sageandstone',
+          consentAccepted: true,
+          socialHandle: store.socialHandle || undefined,
+          deviceKey: ensureDeviceKey(),
+          tableId: store.tableId,
+          videoClips: videoClips.map((clip) => ({ blob: clip.blob, ext: clip.ext })),
+          audioClips: audioClips.map((clip) => ({ blob: clip.blob, ext: clip.ext })),
+        });
 
-        for (const clip of videoClips) {
-          if (!clip.needsOptimization) {
-            preparedVideoClips.push({ blob: clip.blob, ext: clip.ext });
-            continue;
-          }
-
-          const optimized = await optimizeNativeVideoClip(
-            clip.blob,
-            clip.durationSeconds,
-            (progress) =>
-              setPhase({
-                kind: 'optimizing',
-                progress: (optimizedCount + progress) / nativeVideoCount,
-              }),
-          );
-          optimizedCount += 1;
-          preparedVideoClips.push({ blob: optimized.blob, ext: optimized.ext });
-          setPhase({ kind: 'optimizing', progress: optimizedCount / nativeVideoCount });
-        }
-      } else {
-        preparedVideoClips.push(
-          ...videoClips.map((clip) => ({ blob: clip.blob, ext: clip.ext })),
-        );
+        setPhase({ kind: 'polling', result });
+        return;
       }
 
       setPhase({ kind: 'concatenating', progress: 0 });
 
       const concat = await concatClips(
-        preparedVideoClips,
+        videoClips.map((clip) => ({ blob: clip.blob, ext: clip.ext })),
         (progress) => setPhase({ kind: 'concatenating', progress }),
       );
 
@@ -181,7 +166,7 @@ export default function PreviewPage() {
                 phase.kind === 'uploading' ||
                 phase.kind === 'polling' ||
                 phase.kind === 'ready',
-              current: phase.kind === 'optimizing',
+              current: phase.kind === 'server_processing',
             },
           ]
         : []),
@@ -283,9 +268,9 @@ export default function PreviewPage() {
             ))}
           </ul>
 
-          {phase.kind === 'optimizing' ? (
+          {phase.kind === 'server_processing' ? (
             <p className="mt-4 text-center font-mono text-[10px] uppercase tracking-[0.15em] text-muted">
-              Preparing phone shots - {Math.round(phase.progress * 100)}%
+              Preparing phone shots on the server
             </p>
           ) : null}
 

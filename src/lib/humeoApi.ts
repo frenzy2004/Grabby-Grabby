@@ -49,6 +49,19 @@ export type SubmitInput = {
   videoFileName?: string;
 };
 
+export type SubmitClip = {
+  blob: Blob;
+  ext: 'webm' | 'mp4' | 'mov';
+};
+
+export type SubmitClipsInput = Omit<
+  SubmitInput,
+  'durationSeconds' | 'video' | 'videoFileName'
+> & {
+  videoClips: SubmitClip[];
+  audioClips: SubmitClip[];
+};
+
 export async function submit(input: SubmitInput): Promise<PublicSubmitResult> {
   const form = new FormData();
   form.append('slug', input.slug);
@@ -61,6 +74,38 @@ export async function submit(input: SubmitInput): Promise<PublicSubmitResult> {
   form.append('video', input.video, filename);
 
   const res = await fetch(endpoint('/api/public/reviews/submit'), {
+    method: 'POST',
+    body: form,
+  });
+
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((body as { error?: string }).error || `Submit failed (${res.status})`);
+  }
+  return body as PublicSubmitResult;
+}
+
+export async function submitClips(input: SubmitClipsInput): Promise<PublicSubmitResult> {
+  const form = new FormData();
+  form.append('slug', input.slug);
+  form.append('consentAccepted', input.consentAccepted ? 'true' : 'false');
+  form.append('socialHandle', input.socialHandle ?? '');
+  form.append('deviceKey', input.deviceKey);
+  if (input.tableId) form.append('tableId', input.tableId);
+
+  form.append('videoClipCount', String(input.videoClips.length));
+  input.videoClips.forEach((clip, index) => {
+    form.append(`videoClip${index}`, clip.blob, `video-${index}.${clip.ext}`);
+    form.append(`videoClip${index}Ext`, clip.ext);
+  });
+
+  form.append('audioClipCount', String(input.audioClips.length));
+  input.audioClips.forEach((clip, index) => {
+    form.append(`audioClip${index}`, clip.blob, `audio-${index}.${clip.ext}`);
+    form.append(`audioClip${index}Ext`, clip.ext);
+  });
+
+  const res = await fetch(endpoint('/api/public/reviews/submit-clips'), {
     method: 'POST',
     body: form,
   });

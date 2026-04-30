@@ -1,3 +1,13 @@
+---
+title: Grabby Voice
+colorFrom: green
+colorTo: yellow
+sdk: docker
+app_port: 7860
+fullWidth: true
+pinned: false
+---
+
 # Matcha Moments — frontend
 
 Cafe-aesthetic, mobile-first PWA that walks a customer through a 5-clip guided

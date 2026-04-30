@@ -7,6 +7,7 @@ import { ProgressPips } from '@/components/ProgressPips';
 import { PromptCard } from '@/components/PromptCard';
 import { RecordButton } from '@/components/RecordButton';
 import { RecordingBadge } from '@/components/RecordingBadge';
+import { MobileShell } from '@/components/MobileShell';
 import { useGuidedRecording } from '@/hooks/useGuidedRecording';
 import { recordingStore, useRecordingStore } from '@/lib/recordingStore';
 import type { PublicReviewCampaign } from '@/lib/reviews/types';
@@ -138,7 +139,8 @@ function RecorderInner({
   };
 
   return (
-    <main className="relative flex min-h-dvh flex-col bg-[#0e0d0b] text-white">
+    <MobileShell tone="dark">
+      <main className="relative flex min-h-dvh flex-col bg-[#0e0d0b] text-white">
       {isAudio ? (
         <div
           className="absolute inset-0 flex items-center justify-center bg-[radial-gradient(circle_at_50%_35%,rgba(184,201,168,0.28),transparent_34%),linear-gradient(160deg,#15130f,#272119_55%,#0e0d0b)]"
@@ -233,6 +235,7 @@ function RecorderInner({
           ) : null}
         </div>
       </div>
-    </main>
+      </main>
+    </MobileShell>
   );
 }

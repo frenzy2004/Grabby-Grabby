@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  output: 'standalone',
   // ffmpeg.wasm needs SharedArrayBuffer, which requires cross-origin isolation headers.
   async headers() {
     return [

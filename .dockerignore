@@ -1,0 +1,13 @@
+.git
+.next
+.vercel
+.cursor
+node_modules
+.local-review-data
+reference
+reference-2
+.env
+.env.*
+*.log
+tsconfig.tsbuildinfo
+matcha-moments-prototype_2.html

@@ -16,6 +16,7 @@ export type RecordedClip = {
   blob: Blob;
   durationSeconds: number;
   ext: 'webm' | 'mp4' | 'mov';
+  needsOptimization?: boolean;
 };
 
 type Listener = () => void;

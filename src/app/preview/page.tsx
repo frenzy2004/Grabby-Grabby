@@ -9,6 +9,7 @@ import { RenderShimmer } from '@/components/RenderShimmer';
 import { useSubmissionPolling } from '@/hooks/useSubmissionPolling';
 import { concatClips } from '@/lib/ffmpeg';
 import { submit } from '@/lib/humeoApi';
+import { optimizeNativeVideoClip } from '@/lib/nativeVideoOptimizer';
 import { recordingStore, useRecordingStore } from '@/lib/recordingStore';
 import type { PublicSubmitResult } from '@/lib/reviews/types';
 import { ensureDeviceKey } from '@/lib/utils';
@@ -16,6 +17,7 @@ import { addVoiceoverToVideo } from '@/lib/voiceover';
 
 type Phase =
   | { kind: 'idle' }
+  | { kind: 'optimizing'; progress: number }
   | { kind: 'concatenating'; progress: number }
   | { kind: 'mixing'; progress: number }
   | { kind: 'uploading' }
@@ -71,10 +73,42 @@ export default function PreviewPage() {
     }
 
     try {
+      const nativeVideoCount = videoClips.filter((clip) => clip.needsOptimization).length;
+      const preparedVideoClips: Array<{ blob: Blob; ext: 'webm' | 'mp4' | 'mov' }> = [];
+
+      if (nativeVideoCount > 0) {
+        setPhase({ kind: 'optimizing', progress: 0 });
+        let optimizedCount = 0;
+
+        for (const clip of videoClips) {
+          if (!clip.needsOptimization) {
+            preparedVideoClips.push({ blob: clip.blob, ext: clip.ext });
+            continue;
+          }
+
+          const optimized = await optimizeNativeVideoClip(
+            clip.blob,
+            clip.durationSeconds,
+            (progress) =>
+              setPhase({
+                kind: 'optimizing',
+                progress: (optimizedCount + progress) / nativeVideoCount,
+              }),
+          );
+          optimizedCount += 1;
+          preparedVideoClips.push({ blob: optimized.blob, ext: optimized.ext });
+          setPhase({ kind: 'optimizing', progress: optimizedCount / nativeVideoCount });
+        }
+      } else {
+        preparedVideoClips.push(
+          ...videoClips.map((clip) => ({ blob: clip.blob, ext: clip.ext })),
+        );
+      }
+
       setPhase({ kind: 'concatenating', progress: 0 });
 
       const concat = await concatClips(
-        videoClips.map((clip) => ({ blob: clip.blob, ext: clip.ext })),
+        preparedVideoClips,
         (progress) => setPhase({ kind: 'concatenating', progress }),
       );
 
@@ -131,12 +165,33 @@ export default function PreviewPage() {
   };
 
   const isReady = phase.kind === 'ready';
+  const hasNativeVideoClips = store.orderedClips.some(
+    (clip) => clip.mediaType !== 'audio' && clip.needsOptimization,
+  );
 
   const renderSteps = useMemo(
     () => [
+      ...(hasNativeVideoClips
+        ? [
+            {
+              label: 'Preparing phone shots',
+              done:
+                phase.kind === 'concatenating' ||
+                phase.kind === 'mixing' ||
+                phase.kind === 'uploading' ||
+                phase.kind === 'polling' ||
+                phase.kind === 'ready',
+              current: phase.kind === 'optimizing',
+            },
+          ]
+        : []),
       {
         label: 'Stitching recorded clips',
-        done: phase.kind !== 'concatenating',
+        done:
+          phase.kind === 'mixing' ||
+          phase.kind === 'uploading' ||
+          phase.kind === 'polling' ||
+          phase.kind === 'ready',
         current: phase.kind === 'concatenating',
       },
       {
@@ -160,7 +215,7 @@ export default function PreviewPage() {
         current: false,
       },
     ],
-    [isReady, phase.kind],
+    [hasNativeVideoClips, isReady, phase.kind],
   );
 
   return (
@@ -227,6 +282,12 @@ export default function PreviewPage() {
               </li>
             ))}
           </ul>
+
+          {phase.kind === 'optimizing' ? (
+            <p className="mt-4 text-center font-mono text-[10px] uppercase tracking-[0.15em] text-muted">
+              Preparing phone shots - {Math.round(phase.progress * 100)}%
+            </p>
+          ) : null}
 
           {phase.kind === 'concatenating' ? (
             <p className="mt-4 text-center font-mono text-[10px] uppercase tracking-[0.15em] text-muted">

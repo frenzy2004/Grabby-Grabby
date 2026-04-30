@@ -24,6 +24,18 @@ type ClipReadyInput = {
   ext: 'webm' | 'mp4' | 'mov';
 };
 
+const NATIVE_VIDEO_WIDTH = 540;
+const NATIVE_VIDEO_HEIGHT = 960;
+const NATIVE_VIDEO_FPS = 24;
+const NATIVE_VIDEO_BITRATE = 1_200_000;
+const NATIVE_AUDIO_BITRATE = 32_000;
+
+const nativeRecorderMimePriority = [
+  'video/webm;codecs=vp8,opus',
+  'video/webm;codecs=vp9,opus',
+  'video/webm',
+];
+
 export function GuidedRecordingClient({ slug, tableId, campaign }: Props) {
   const router = useRouter();
   const store = useRecordingStore();
@@ -185,6 +197,219 @@ function extFromFile(file: File): 'webm' | 'mp4' | 'mov' {
   return 'webm';
 }
 
+function pickNativeRecorderMime() {
+  if (typeof MediaRecorder === 'undefined') return undefined;
+  for (const mime of nativeRecorderMimePriority) {
+    if (MediaRecorder.isTypeSupported(mime)) return mime;
+  }
+  return undefined;
+}
+
+function drawContainedVideo(
+  ctx: CanvasRenderingContext2D,
+  video: HTMLVideoElement,
+  width: number,
+  height: number,
+) {
+  const sourceWidth = video.videoWidth || width;
+  const sourceHeight = video.videoHeight || height;
+  const scale = Math.min(width / sourceWidth, height / sourceHeight);
+  const drawWidth = sourceWidth * scale;
+  const drawHeight = sourceHeight * scale;
+  const dx = (width - drawWidth) / 2;
+  const dy = (height - drawHeight) / 2;
+
+  ctx.fillStyle = '#0e0d0b';
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(video, dx, dy, drawWidth, drawHeight);
+}
+
+function createSilentAudioTrack() {
+  const AudioContextCtor =
+    window.AudioContext ??
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextCtor) return null;
+
+  const audioContext = new AudioContextCtor();
+  const oscillator = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  const destination = audioContext.createMediaStreamDestination();
+
+  gain.gain.value = 0;
+  oscillator.connect(gain);
+  gain.connect(destination);
+  oscillator.start();
+
+  const track = destination.stream.getAudioTracks()[0];
+  if (!track) {
+    oscillator.stop();
+    void audioContext.close();
+    return null;
+  }
+
+  return {
+    track,
+    close: () => {
+      try {
+        oscillator.stop();
+      } catch {
+        /* ignore */
+      }
+      track.stop();
+      void audioContext.close();
+    },
+  };
+}
+
+async function optimizeNativeVideoFile(
+  file: File,
+  maxSeconds: number,
+  onProgress: (progress: number) => void,
+): Promise<ClipReadyInput> {
+  if (
+    typeof MediaRecorder === 'undefined' ||
+    typeof HTMLCanvasElement === 'undefined' ||
+    typeof HTMLCanvasElement.prototype.captureStream !== 'function'
+  ) {
+    return {
+      blob: file,
+      durationSeconds: Math.max(1, Math.round(await probeVideoDuration(file, maxSeconds))),
+      ext: extFromFile(file),
+    };
+  }
+
+  const silentAudio = createSilentAudioTrack();
+  if (!silentAudio) {
+    return {
+      blob: file,
+      durationSeconds: Math.max(1, Math.round(await probeVideoDuration(file, maxSeconds))),
+      ext: extFromFile(file),
+    };
+  }
+
+  const url = URL.createObjectURL(file);
+  const video = document.createElement('video');
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  if (!ctx) {
+    silentAudio.close();
+    URL.revokeObjectURL(url);
+    throw new Error('Could not prepare the shot for stitching.');
+  }
+
+  canvas.width = NATIVE_VIDEO_WIDTH;
+  canvas.height = NATIVE_VIDEO_HEIGHT;
+
+  const waitForMetadata = new Promise<void>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error('Video took too long to load.')), 8000);
+    video.onloadedmetadata = () => {
+      window.clearTimeout(timer);
+      resolve();
+    };
+    video.onerror = () => {
+      window.clearTimeout(timer);
+      reject(new Error('That video could not be read. Please record this shot again.'));
+    };
+  });
+
+  video.preload = 'auto';
+  video.muted = true;
+  video.playsInline = true;
+  video.src = url;
+  await waitForMetadata;
+
+  const durationLimit = Math.max(
+    1,
+    Math.min(Number.isFinite(video.duration) ? video.duration : maxSeconds, maxSeconds),
+  );
+  const stream = canvas.captureStream(NATIVE_VIDEO_FPS);
+  stream.addTrack(silentAudio.track);
+
+  const mimeType = pickNativeRecorderMime();
+  const recorder = mimeType
+    ? new MediaRecorder(stream, {
+        mimeType,
+        videoBitsPerSecond: NATIVE_VIDEO_BITRATE,
+        audioBitsPerSecond: NATIVE_AUDIO_BITRATE,
+      })
+    : new MediaRecorder(stream, {
+        videoBitsPerSecond: NATIVE_VIDEO_BITRATE,
+        audioBitsPerSecond: NATIVE_AUDIO_BITRATE,
+      });
+  const chunks: Blob[] = [];
+
+  const result = await new Promise<ClipReadyInput>((resolve, reject) => {
+    let raf = 0;
+    let timeout = 0;
+
+    const cleanup = () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      if (timeout) window.clearTimeout(timeout);
+      video.pause();
+      stream.getTracks().forEach((track) => track.stop());
+      silentAudio.close();
+      URL.revokeObjectURL(url);
+    };
+
+    const stopRecorder = () => {
+      if (recorder.state !== 'inactive') {
+        try {
+          recorder.requestData();
+        } catch {
+          /* ignore */
+        }
+        window.setTimeout(() => {
+          if (recorder.state !== 'inactive') recorder.stop();
+        }, 80);
+      }
+    };
+
+    const draw = () => {
+      drawContainedVideo(ctx, video, NATIVE_VIDEO_WIDTH, NATIVE_VIDEO_HEIGHT);
+      onProgress(Math.min(0.98, video.currentTime / durationLimit));
+
+      if (video.ended || video.currentTime >= durationLimit) {
+        stopRecorder();
+        return;
+      }
+
+      raf = window.requestAnimationFrame(draw);
+    };
+
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) chunks.push(event.data);
+    };
+    recorder.onerror = () => {
+      cleanup();
+      reject(new Error('Could not optimize this shot. Please record a shorter clip.'));
+    };
+    recorder.onstop = () => {
+      cleanup();
+      const blob = new Blob(chunks, { type: mimeType ?? 'video/webm' });
+      if (blob.size <= 0) {
+        reject(new Error('That shot did not save cleanly. Please record it again.'));
+        return;
+      }
+      onProgress(1);
+      resolve({
+        blob,
+        durationSeconds: Math.max(1, Math.round(Math.min(video.currentTime, durationLimit))),
+        ext: 'webm',
+      });
+    };
+
+    timeout = window.setTimeout(() => stopRecorder(), (durationLimit + 4) * 1000);
+    recorder.start(500);
+    void video.play().then(draw).catch(() => {
+      cleanup();
+      reject(new Error('Could not play back this shot for stitching.'));
+    });
+  });
+
+  return result;
+}
+
 async function probeVideoDuration(file: File, fallbackSeconds: number) {
   return await new Promise<number>((resolve) => {
     const url = URL.createObjectURL(file);
@@ -275,6 +500,7 @@ function NativeVideoCapture({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [status, setStatus] = useState<'ready' | 'importing'>('ready');
   const [error, setError] = useState<string | null>(null);
+  const [importProgress, setImportProgress] = useState(0);
 
   const handleChooseFile = () => {
     setError(null);
@@ -294,15 +520,15 @@ function NativeVideoCapture({
     }
 
     setStatus('importing');
+    setImportProgress(0);
     setError(null);
-    const durationSeconds = await probeVideoDuration(file, prompt.maxSeconds);
-    setStatus('ready');
-
-    onClipReady({
-      blob: file,
-      durationSeconds: Math.max(1, Math.round(durationSeconds || prompt.maxSeconds)),
-      ext: extFromFile(file),
-    });
+    try {
+      const clip = await optimizeNativeVideoFile(file, prompt.maxSeconds, setImportProgress);
+      onClipReady(clip);
+    } catch (err) {
+      setStatus('ready');
+      setError(err instanceof Error ? err.message : 'Could not save that shot. Please try again.');
+    }
   };
 
   return (
@@ -355,6 +581,11 @@ function NativeVideoCapture({
             <p className="mt-5 max-w-[280px] text-sm leading-6 text-white/70">
               Use your phone camera for the cleanest food shot. Keep it short and steady.
             </p>
+            {status === 'importing' ? (
+              <p className="mt-3 font-mono text-[11px] uppercase tracking-[0.14em] text-sage">
+                Optimizing shot - {Math.round(importProgress * 100)}%
+              </p>
+            ) : null}
             {error ? (
               <div className="mt-5 rounded-2xl bg-red-500/90 px-4 py-2 text-sm">
                 {error}

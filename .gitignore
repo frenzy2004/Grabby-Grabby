@@ -41,3 +41,5 @@ reference-2/
 
 # Local office prototype uploads and submission metadata
 .local-review-data/
+
+.vercel

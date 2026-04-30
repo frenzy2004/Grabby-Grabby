@@ -39,10 +39,9 @@ export type ConcatResult = {
 /**
  * Concatenate an ordered list of recorded video Blobs into a single output blob.
  *
- * MediaRecorder WebM clips can carry timestamp offsets from the live preview
- * stream. A fast stream-copy concat preserves those offsets, which can make the
- * produced video freeze while the timestamp keeps moving. Decode every clip,
- * reset audio/video PTS to zero, normalize to a vertical canvas, then concat.
+ * Normalize each clip independently, reset audio/video PTS per clip, then use
+ * ffmpeg's concat filter. The concat demuxer path can preserve timestamp gaps
+ * between MediaRecorder clips, which shows up as frozen video at clip joins.
  */
 export async function concatClips(
   inputs: ConcatInput[],
@@ -78,7 +77,6 @@ export async function concatClips(
   }
 
   const outputName = `matcha-moments-${runId}.webm`;
-  const listName = `list-${runId}.txt`;
 
   async function runOrThrow(args: string[], label: string) {
     logs.length = 0;
@@ -101,28 +99,31 @@ export async function concatClips(
     }
   }
 
-  async function writeConcatList() {
-    const listText = inputFiles.map((name) => `file '${name}'`).join('\n');
-    await ffmpeg.writeFile(listName, new TextEncoder().encode(listText));
-  }
-
-  async function runSmoothConcat() {
-    await writeConcatList();
+  async function runNormalizedConcat() {
+    const inputArgs = inputFiles.flatMap((name) => ['-i', name]);
+    const normalizedStreams = inputFiles
+      .map((_, i) => {
+        const video =
+          `[${i}:v]scale=720:1280:force_original_aspect_ratio=decrease,` +
+          'pad=720:1280:(ow-iw)/2:(oh-ih)/2,' +
+          `setsar=1,fps=30,setpts=PTS-STARTPTS[v${i}]`;
+        const audio =
+          `[${i}:a]aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS[a${i}]`;
+        return `${video};${audio}`;
+      })
+      .join(';');
+    const concatInputs = inputFiles.map((_, i) => `[v${i}][a${i}]`).join('');
+    const filterComplex = `${normalizedStreams};${concatInputs}concat=n=${inputFiles.length}:v=1:a=1[v][a]`;
 
     await runOrThrow([
       '-y',
-      '-fflags',
-      '+genpts',
-      '-f',
-      'concat',
-      '-safe',
-      '0',
-      '-i',
-      listName,
-      '-vf',
-      'setpts=PTS-STARTPTS,scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30',
-      '-af',
-      'aresample=async=1:first_pts=0',
+      ...inputArgs,
+      '-filter_complex',
+      filterComplex,
+      '-map',
+      '[v]',
+      '-map',
+      '[a]',
       '-c:v',
       'libvpx',
       '-b:v',
@@ -130,50 +131,23 @@ export async function concatClips(
       '-deadline',
       'realtime',
       '-cpu-used',
-      '6',
+      '5',
       '-c:a',
       'libopus',
       '-b:a',
       '96k',
+      '-shortest',
       '-avoid_negative_ts',
       'make_zero',
       outputName,
-    ], 'Smooth concat');
+    ], 'Normalized concat');
   }
 
-  async function runCopyConcat() {
-    await writeConcatList();
-
-    await runOrThrow([
-      '-y',
-      '-f',
-      'concat',
-      '-safe',
-      '0',
-      '-i',
-      listName,
-      '-c',
-      'copy',
-      '-avoid_negative_ts',
-      'make_zero',
-      outputName,
-    ], 'Reliable concat');
-  }
-
-  let lastError: unknown = null;
-  for (const strategy of [runSmoothConcat, runCopyConcat]) {
-    try {
-      await strategy();
-      lastError = null;
-      break;
-    } catch (err) {
-      lastError = err;
-      await removeOutput();
-    }
-  }
-
-  if (lastError) {
-    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  try {
+    await runNormalizedConcat();
+  } catch (err) {
+    await removeOutput();
+    throw err instanceof Error ? err : new Error(String(err));
   }
 
   const data = await ffmpeg.readFile(outputName);
@@ -195,7 +169,6 @@ export async function concatClips(
     }
   }
   try {
-    await ffmpeg.deleteFile(listName);
     await ffmpeg.deleteFile(outputName);
   } catch {
     /* ignore */

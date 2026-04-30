@@ -107,7 +107,8 @@ export function useGuidedRecording({ prompt, onClipReady }: UseGuidedRecordingOp
     }
   }, [mediaType, prompt.camera]);
 
-  // Re-acquire the stream when the prompt's camera direction changes.
+  // Re-acquire the stream only when the capture source changes. Adjacent food
+  // shots should keep the same camera warm instead of tearing it down.
   useEffect(() => {
     void requestPermissionAndPreview();
     return () => {
@@ -121,7 +122,7 @@ export function useGuidedRecording({ prompt, onClipReady }: UseGuidedRecordingOp
       stopStream();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prompt.step, prompt.camera, mediaType]);
+  }, [prompt.camera, mediaType]);
 
   const startRecording = useCallback(() => {
     if (!streamRef.current) return;

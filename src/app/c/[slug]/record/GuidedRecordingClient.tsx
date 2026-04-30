@@ -77,7 +77,7 @@ export function GuidedRecordingClient({ slug, tableId, campaign }: Props) {
 
   return (
     <RecorderInner
-      key={`${currentPrompt.step}-${currentPrompt.camera}`}
+      key={`${currentPrompt.mediaType ?? 'video'}-${currentPrompt.camera}`}
       stepNum={stepNum}
       totalSteps={totalSteps}
       doneCount={

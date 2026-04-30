@@ -170,10 +170,9 @@ function useVideoCaptureMode(mediaType: 'video' | 'audio') {
       return;
     }
 
-    const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false;
-    const narrowViewport = window.matchMedia?.('(max-width: 760px)').matches ?? false;
-    const mobileUserAgent = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-    setMode(coarsePointer || narrowViewport || mobileUserAgent ? 'native' : 'browser');
+    const params = new URLSearchParams(window.location.search);
+    const explicitCaptureMode = params.get('capture');
+    setMode(explicitCaptureMode === 'native' ? 'native' : 'browser');
   }, [mediaType]);
 
   return mode;

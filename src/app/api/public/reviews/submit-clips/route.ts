@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
     const rendered = await renderClipsOnServer({ videoClips, audioClips });
     const videoBytes = new Uint8Array(rendered.bytes.byteLength);
     videoBytes.set(rendered.bytes);
-    const video = new File([videoBytes], rendered.filename, { type: 'video/webm' });
+    const video = new File([videoBytes], rendered.filename, { type: 'video/mp4' });
     const result = await createSubmission({
       slug,
       consentAccepted,

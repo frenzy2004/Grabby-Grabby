@@ -11,8 +11,8 @@ export type RecordingState =
   | 'finalizing';
 
 const recorderMimePriority = [
-  'video/webm;codecs=vp9,opus',
   'video/webm;codecs=vp8,opus',
+  'video/webm;codecs=vp9,opus',
   'video/webm',
   'video/mp4',
 ];
@@ -26,6 +26,8 @@ const audioRecorderMimePriority = [
 const RECORDER_TIMESLICE_MS = 500;
 const MIN_VIDEO_BLOB_BYTES = 16 * 1024;
 const MIN_AUDIO_BLOB_BYTES = 4 * 1024;
+const VIDEO_BITS_PER_SECOND = 1_400_000;
+const AUDIO_BITS_PER_SECOND = 64_000;
 
 function pickRecorderMime(mediaType: 'video' | 'audio') {
   if (typeof MediaRecorder === 'undefined') return undefined;
@@ -41,6 +43,22 @@ function extFromMime(mime: string | undefined): 'webm' | 'mp4' | 'mov' {
   if (mime.includes('mp4')) return 'mp4';
   if (mime.includes('quicktime')) return 'mov';
   return 'webm';
+}
+
+function videoConstraints(camera: 'front' | 'rear', exactFacingMode: boolean): MediaTrackConstraints {
+  return {
+    facingMode:
+      camera === 'rear'
+        ? exactFacingMode
+          ? { exact: 'environment' }
+          : { ideal: 'environment' }
+        : exactFacingMode
+          ? { exact: 'user' }
+          : { ideal: 'user' },
+    width: { ideal: 720, max: 1280 },
+    height: { ideal: 1280, max: 1920 },
+    frameRate: { ideal: 24, max: 30 },
+  };
 }
 
 async function canReadRecordedMedia(blob: Blob, mediaType: 'video' | 'audio') {
@@ -137,18 +155,22 @@ export function useGuidedRecording({ prompt, onClipReady }: UseGuidedRecordingOp
     setError(null);
     setState('requesting_permission');
     try {
-      const stream = await navigator.mediaDevices.getUserMedia(
-        mediaType === 'audio'
-          ? { audio: true }
-          : {
-              video: {
-                facingMode: prompt.camera === 'rear' ? { ideal: 'environment' } : { ideal: 'user' },
-                width: { ideal: 1080 },
-                height: { ideal: 1920 },
-              },
-              audio: true,
-            },
-      );
+      let stream: MediaStream;
+      if (mediaType === 'audio') {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } else {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: videoConstraints(prompt.camera, true),
+            audio: true,
+          });
+        } catch {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: videoConstraints(prompt.camera, false),
+            audio: true,
+          });
+        }
+      }
       streamRef.current = stream;
       if (mediaType === 'video' && videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -180,9 +202,15 @@ export function useGuidedRecording({ prompt, onClipReady }: UseGuidedRecordingOp
     const mime = pickRecorderMime(mediaType);
     let recorder: MediaRecorder;
     try {
-      recorder = mime
-        ? new MediaRecorder(streamRef.current, { mimeType: mime })
-        : new MediaRecorder(streamRef.current);
+      const options: MediaRecorderOptions = {};
+      if (mime) options.mimeType = mime;
+      if (mediaType === 'video') {
+        options.videoBitsPerSecond = VIDEO_BITS_PER_SECOND;
+        options.audioBitsPerSecond = AUDIO_BITS_PER_SECOND;
+      } else {
+        options.audioBitsPerSecond = AUDIO_BITS_PER_SECOND;
+      }
+      recorder = new MediaRecorder(streamRef.current, options);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Recording is not supported on this device.');
       return;

@@ -22,7 +22,7 @@ const WORK_DIR = path.join(process.cwd(), '.local-review-data', 'server-renders'
 const VIDEO_WIDTH = 540;
 const VIDEO_HEIGHT = 960;
 const VIDEO_FPS = 24;
-const MAX_VIDEO_CLIP_SECONDS = 6;
+const MAX_VIDEO_CLIP_SECONDS = 5;
 const MAX_AUDIO_CLIP_SECONDS = 12;
 
 function safeExt(ext: string) {
@@ -121,7 +121,7 @@ export async function renderClipsOnServer(input: ServerRenderInput): Promise<Ser
 
   const videoPaths: string[] = [];
   const audioPaths: string[] = [];
-  const outputPath = path.join(runDir, `matcha-server-${runId}.webm`);
+  const outputPath = path.join(runDir, `matcha-server-${runId}.mp4`);
 
   try {
     for (let i = 0; i < input.videoClips.length; i++) {
@@ -197,14 +197,16 @@ export async function renderClipsOnServer(input: ServerRenderInput): Promise<Ser
         filterComplex,
         ...outputArgs,
         '-c:v',
-        'libvpx',
-        '-b:v',
-        '1.1M',
-        '-deadline',
-        'realtime',
-        '-cpu-used',
-        '6',
-        ...(audioPaths.length ? ['-c:a', 'libopus', '-b:a', '96k'] : ['-an']),
+        'libx264',
+        '-preset',
+        'ultrafast',
+        '-tune',
+        'zerolatency',
+        '-crf',
+        '30',
+        ...(audioPaths.length ? ['-c:a', 'aac', '-b:a', '96k'] : ['-an']),
+        '-movflags',
+        '+faststart',
         '-avoid_negative_ts',
         'make_zero',
         outputPath,
@@ -218,7 +220,7 @@ export async function renderClipsOnServer(input: ServerRenderInput): Promise<Ser
     return {
       bytes,
       durationSeconds: await probeDuration(outputPath),
-      filename: `matcha-server-${runId}.webm`,
+      filename: `matcha-server-${runId}.mp4`,
     };
   } finally {
     await rm(runDir, { recursive: true, force: true }).catch(() => undefined);

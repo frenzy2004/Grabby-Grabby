@@ -14,6 +14,7 @@ export async function POST(req: NextRequest) {
     const form = await req.formData();
     const sessionId = sanitizeText(form.get('sessionId'), 100);
     const step = Number(sanitizeText(form.get('step'), 10));
+    const takeId = Number(sanitizeText(form.get('takeId'), 20));
     const mediaType = sanitizeText(form.get('mediaType'), 12);
     const ext = sanitizeText(form.get('ext'), 12);
     const file = form.get('clip');
@@ -28,6 +29,7 @@ export async function POST(req: NextRequest) {
     const clip = await saveSessionClip({
       sessionId,
       step,
+      takeId,
       mediaType,
       ext,
       file,

@@ -56,7 +56,7 @@ export function GuidedRecordingClient({ slug, tableId, campaign }: Props) {
   const handleClipReady = useCallback(
     (clip: ClipReadyInput) => {
       const mediaType = currentPrompt?.mediaType ?? 'video';
-      recordingStore.setClip({
+      const savedClip = recordingStore.setClip({
         step: stepNum,
         mediaType,
         blob: clip.blob,
@@ -72,10 +72,12 @@ export function GuidedRecordingClient({ slug, tableId, campaign }: Props) {
       if (shouldUploadForServer) {
         const { sessionId } = recordingStore.snapshot();
         recordingStore.startClipUpload(
-          stepNum,
+          savedClip.step,
+          savedClip.takeId,
           uploadClip({
             sessionId,
-            step: stepNum,
+            step: savedClip.step,
+            takeId: savedClip.takeId,
             mediaType,
             blob: clip.blob,
             ext: clip.ext,

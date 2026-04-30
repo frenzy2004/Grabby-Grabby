@@ -13,6 +13,7 @@ import type { UploadedClipRef } from '@/lib/humeoApi';
 
 export type RecordedClip = {
   step: number;
+  takeId: number;
   mediaType: 'video' | 'audio';
   blob: Blob;
   durationSeconds: number;
@@ -22,9 +23,9 @@ export type RecordedClip = {
 
 export type ClipUploadState =
   | { status: 'idle' }
-  | { status: 'pending' }
-  | { status: 'uploaded'; ref: UploadedClipRef }
-  | { status: 'error'; message: string };
+  | { status: 'pending'; takeId: number }
+  | { status: 'uploaded'; takeId: number; ref: UploadedClipRef }
+  | { status: 'error'; takeId: number; message: string };
 
 type Listener = () => void;
 
@@ -41,7 +42,8 @@ type Snapshot = {
 
 let clipsByStep: Record<number, RecordedClip> = {};
 let clipUploadsByStep: Record<number, ClipUploadState> = {};
-let clipUploadPromises: Record<number, Promise<UploadedClipRef>> = {};
+let clipUploadPromises: Record<number, { takeId: number; promise: Promise<UploadedClipRef> }> = {};
+let takeIdsByStep: Record<number, number> = {};
 let skippedSteps: Record<number, true> = {};
 let socialHandle = '';
 let tableId: string | null = null;
@@ -74,41 +76,59 @@ function buildSnapshot(): Snapshot {
 }
 
 export const recordingStore = {
-  setClip(clip: RecordedClip) {
-    clipsByStep = { ...clipsByStep, [clip.step]: clip };
+  setClip(clip: Omit<RecordedClip, 'takeId'>) {
+    const takeId = (takeIdsByStep[clip.step] ?? 0) + 1;
+    takeIdsByStep = { ...takeIdsByStep, [clip.step]: takeId };
+    const recordedClip = { ...clip, takeId };
+    clipsByStep = { ...clipsByStep, [clip.step]: recordedClip };
+
+    const nextUploads = { ...clipUploadsByStep };
+    delete nextUploads[clip.step];
+    clipUploadsByStep = nextUploads;
+    const nextPromises = { ...clipUploadPromises };
+    delete nextPromises[clip.step];
+    clipUploadPromises = nextPromises;
+
     const nextSkipped = { ...skippedSteps };
     delete nextSkipped[clip.step];
     skippedSteps = nextSkipped;
     emit();
+    return recordedClip;
   },
-  startClipUpload(step: number, promise: Promise<UploadedClipRef>) {
-    clipUploadPromises = { ...clipUploadPromises, [step]: promise };
-    clipUploadsByStep = { ...clipUploadsByStep, [step]: { status: 'pending' } };
+  startClipUpload(step: number, takeId: number, promise: Promise<UploadedClipRef>) {
+    clipUploadPromises = { ...clipUploadPromises, [step]: { takeId, promise } };
+    clipUploadsByStep = { ...clipUploadsByStep, [step]: { status: 'pending', takeId } };
     emit();
 
     promise
       .then((ref) => {
-        if (clipUploadPromises[step] !== promise) return;
-        clipUploadsByStep = { ...clipUploadsByStep, [step]: { status: 'uploaded', ref } };
+        const activeUpload = clipUploadPromises[step];
+        if (activeUpload?.promise !== promise || activeUpload.takeId !== takeId) return;
+        clipUploadsByStep = { ...clipUploadsByStep, [step]: { status: 'uploaded', takeId, ref } };
         emit();
       })
       .catch((err) => {
-        if (clipUploadPromises[step] !== promise) return;
+        const activeUpload = clipUploadPromises[step];
+        if (activeUpload?.promise !== promise || activeUpload.takeId !== takeId) return;
         clipUploadsByStep = {
           ...clipUploadsByStep,
           [step]: {
             status: 'error',
+            takeId,
             message: err instanceof Error ? err.message : 'Clip upload failed',
           },
         };
         emit();
       });
   },
-  getClipUploadPromise(step: number) {
-    return clipUploadPromises[step] ?? null;
+  getClipUploadPromise(step: number, takeId: number) {
+    const activeUpload = clipUploadPromises[step];
+    return activeUpload?.takeId === takeId ? activeUpload.promise : null;
   },
-  getClipUploadState(step: number): ClipUploadState {
-    return clipUploadsByStep[step] ?? { status: 'idle' };
+  getClipUploadState(step: number, takeId: number): ClipUploadState {
+    const state = clipUploadsByStep[step];
+    if (!state || state.status === 'idle') return { status: 'idle' };
+    return state.takeId === takeId ? state : { status: 'idle' };
   },
   removeClip(step: number) {
     const next = { ...clipsByStep };
@@ -145,6 +165,7 @@ export const recordingStore = {
     clipsByStep = {};
     clipUploadsByStep = {};
     clipUploadPromises = {};
+    takeIdsByStep = {};
     skippedSteps = {};
     socialHandle = '';
     tableId = null;

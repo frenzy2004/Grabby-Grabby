@@ -82,7 +82,7 @@ export default function PreviewPage() {
 
         await Promise.all(
           clipsToUpload.map(async (clip) => {
-            const existingState = recordingStore.getClipUploadState(clip.step);
+            const existingState = recordingStore.getClipUploadState(clip.step, clip.takeId);
             if (existingState.status === 'uploaded') {
               uploadedCount += 1;
               setPhase({
@@ -92,16 +92,17 @@ export default function PreviewPage() {
               return;
             }
 
-            let promise = recordingStore.getClipUploadPromise(clip.step);
+            let promise = recordingStore.getClipUploadPromise(clip.step, clip.takeId);
             if (!promise) {
               promise = uploadClip({
                 sessionId: store.sessionId,
                 step: clip.step,
+                takeId: clip.takeId,
                 mediaType: clip.mediaType,
                 blob: clip.blob,
                 ext: clip.ext,
               });
-              recordingStore.startClipUpload(clip.step, promise);
+              recordingStore.startClipUpload(clip.step, clip.takeId, promise);
             }
 
             await promise;

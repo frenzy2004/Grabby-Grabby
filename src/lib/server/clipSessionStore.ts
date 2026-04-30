@@ -1,12 +1,20 @@
-import { mkdir, readdir, readFile, rm, writeFile } from 'fs/promises';
+import { mkdir, readdir, rm, stat, writeFile } from 'fs/promises';
 import path from 'path';
 
 export type StoredClip = {
   step: number;
+  takeId: number;
   mediaType: 'video' | 'audio';
   ext: 'webm' | 'mp4' | 'mov';
   filePath: string;
   size: number;
+};
+
+type ParsedClipFile = {
+  step: number;
+  takeId: number;
+  mediaType: 'video' | 'audio';
+  ext: StoredClip['ext'];
 };
 
 const SESSION_ROOT = path.join(process.cwd(), '.local-review-data', 'clip-sessions');
@@ -33,9 +41,56 @@ function sessionDir(sessionId: string) {
   return absolute;
 }
 
+function safeTakeId(takeId: number) {
+  return Number.isSafeInteger(takeId) && takeId >= 0 ? takeId : 0;
+}
+
+function parseClipFileName(name: string): ParsedClipFile | null {
+  const withTake = /^(\d+)-(video|audio)-(\d+)\.(webm|mp4|mov)$/.exec(name);
+  if (withTake) {
+    return {
+      step: Number(withTake[1]),
+      mediaType: withTake[2] as ParsedClipFile['mediaType'],
+      takeId: Number(withTake[3]),
+      ext: withTake[4] as StoredClip['ext'],
+    };
+  }
+
+  const legacy = /^(\d+)-(video|audio)\.(webm|mp4|mov)$/.exec(name);
+  if (legacy) {
+    return {
+      step: Number(legacy[1]),
+      mediaType: legacy[2] as ParsedClipFile['mediaType'],
+      takeId: 0,
+      ext: legacy[3] as StoredClip['ext'],
+    };
+  }
+
+  return null;
+}
+
+async function removeOlderTakes(dir: string, input: { step: number; mediaType: 'video' | 'audio'; takeId: number }) {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (!entry.isFile()) return;
+      const parsed = parseClipFileName(entry.name);
+      if (!parsed) return;
+      if (
+        parsed.step === input.step &&
+        parsed.mediaType === input.mediaType &&
+        parsed.takeId < input.takeId
+      ) {
+        await rm(path.join(dir, entry.name), { force: true }).catch(() => undefined);
+      }
+    }),
+  );
+}
+
 export async function saveSessionClip(input: {
   sessionId: string;
   step: number;
+  takeId: number;
   mediaType: 'video' | 'audio';
   ext: string;
   file: File;
@@ -51,15 +106,22 @@ export async function saveSessionClip(input: {
   }
 
   const ext = safeExt(input.ext);
+  const takeId = safeTakeId(input.takeId);
   await mkdir(dir, { recursive: true });
 
-  const filePath = path.join(dir, `${input.step}-${input.mediaType}.${ext}`);
+  const filePath = path.join(dir, `${input.step}-${input.mediaType}-${takeId}.${ext}`);
   const bytes = Buffer.from(await input.file.arrayBuffer());
   await writeFile(filePath, bytes);
+  await removeOlderTakes(dir, {
+    step: input.step,
+    mediaType: input.mediaType,
+    takeId,
+  });
 
   return {
     sessionId: input.sessionId,
     step: input.step,
+    takeId,
     mediaType: input.mediaType,
     ext,
     size: bytes.length,
@@ -71,25 +133,41 @@ export async function listSessionClips(sessionId: string) {
   if (!dir) throw new Error('Invalid upload session.');
 
   const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-  const clips: StoredClip[] = [];
+  const clipsBySlot = new Map<string, StoredClip & { mtimeMs: number }>();
 
   for (const entry of entries) {
     if (!entry.isFile()) continue;
-    const match = /^(\d+)-(video|audio)\.(webm|mp4|mov)$/.exec(entry.name);
-    if (!match) continue;
+    const parsed = parseClipFileName(entry.name);
+    if (!parsed) continue;
 
     const filePath = path.join(dir, entry.name);
-    const size = (await readFile(filePath)).byteLength;
-    clips.push({
-      step: Number(match[1]),
-      mediaType: match[2] as 'video' | 'audio',
-      ext: match[3] as StoredClip['ext'],
+    const fileStat = await stat(filePath).catch(() => null);
+    if (!fileStat) continue;
+
+    const slotKey = `${parsed.step}:${parsed.mediaType}`;
+    const existing = clipsBySlot.get(slotKey);
+    if (
+      existing &&
+      (existing.takeId > parsed.takeId ||
+        (existing.takeId === parsed.takeId && existing.mtimeMs >= fileStat.mtimeMs))
+    ) {
+      continue;
+    }
+
+    clipsBySlot.set(slotKey, {
+      step: parsed.step,
+      takeId: parsed.takeId,
+      mediaType: parsed.mediaType,
+      ext: parsed.ext,
       filePath,
-      size,
+      size: fileStat.size,
+      mtimeMs: fileStat.mtimeMs,
     });
   }
 
-  return clips.sort((a, b) => a.step - b.step);
+  return Array.from(clipsBySlot.values())
+    .map(({ mtimeMs: _mtimeMs, ...clip }) => clip)
+    .sort((a, b) => a.step - b.step);
 }
 
 export async function cleanupSessionClips(sessionId: string) {

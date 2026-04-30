@@ -57,6 +57,7 @@ export type SubmitClip = {
 export type UploadedClipRef = {
   sessionId: string;
   step: number;
+  takeId: number;
   mediaType: 'video' | 'audio';
   ext: 'webm' | 'mp4' | 'mov';
   size: number;
@@ -73,6 +74,7 @@ export type SubmitClipsInput = Omit<
 export type UploadClipInput = {
   sessionId: string;
   step: number;
+  takeId: number;
   mediaType: 'video' | 'audio';
   blob: Blob;
   ext: 'webm' | 'mp4' | 'mov';
@@ -144,6 +146,7 @@ export async function uploadClip(input: UploadClipInput): Promise<UploadedClipRe
   const form = new FormData();
   form.append('sessionId', input.sessionId);
   form.append('step', String(input.step));
+  form.append('takeId', String(input.takeId));
   form.append('mediaType', input.mediaType);
   form.append('ext', input.ext);
   form.append('clip', input.blob, `step-${input.step}.${input.ext}`);

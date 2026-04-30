@@ -23,8 +23,10 @@ const WORK_DIR = path.join(process.cwd(), '.local-review-data', 'server-renders'
 const VIDEO_WIDTH = 540;
 const VIDEO_HEIGHT = 960;
 const VIDEO_FPS = 24;
-const MAX_VIDEO_CLIP_SECONDS = 5;
+const MIN_VIDEO_CLIP_SECONDS = 5;
+const MAX_VIDEO_CLIP_SECONDS = 7;
 const MAX_AUDIO_CLIP_SECONDS = 12;
+const AUDIO_VIDEO_SAFETY_SECONDS = 0.2;
 
 function safeExt(ext: string) {
   const normalized = ext.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -112,10 +114,18 @@ async function probeDuration(filePath: string) {
       });
     });
     const duration = Number(output);
-    return Number.isFinite(duration) ? Math.max(0, Math.round(duration)) : 0;
+    return Number.isFinite(duration) ? Math.max(0, duration) : 0;
   } catch {
     return 0;
   }
+}
+
+function formatDuration(seconds: number) {
+  return seconds.toFixed(3).replace(/\.?0+$/, '');
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }
 
 export async function renderClipsOnServer(input: ServerRenderInput): Promise<ServerRenderResult> {
@@ -144,10 +154,31 @@ export async function renderClipsOnServer(input: ServerRenderInput): Promise<Ser
       audioPaths.push(await prepareClipSource(clip, filePath));
     }
 
+    const [videoDurations, audioDurations] = await Promise.all([
+      Promise.all(videoPaths.map(probeDuration)),
+      Promise.all(audioPaths.map(probeDuration)),
+    ]);
+
+    const audioDurationSeconds = audioDurations.reduce((total, duration) => total + duration, 0);
+    const videoClipSeconds =
+      audioDurationSeconds > 0
+        ? clamp(Math.ceil(audioDurationSeconds / videoPaths.length), MIN_VIDEO_CLIP_SECONDS, MAX_VIDEO_CLIP_SECONDS)
+        : MIN_VIDEO_CLIP_SECONDS;
+    const cappedVideoDurations = videoDurations.map((duration) =>
+      duration > 0 ? Math.min(duration, videoClipSeconds) : videoClipSeconds,
+    );
+    const baseVideoDurationSeconds = cappedVideoDurations.reduce((total, duration) => total + duration, 0);
+    const renderTargetSeconds =
+      audioDurationSeconds > 0
+        ? Math.max(1, audioDurationSeconds + AUDIO_VIDEO_SAFETY_SECONDS)
+        : Math.max(1, baseVideoDurationSeconds);
+    const loopFrameCount = Math.max(1, Math.ceil(baseVideoDurationSeconds * VIDEO_FPS));
+    const needsVideoLoop = audioDurationSeconds > 0 && baseVideoDurationSeconds + 0.1 < renderTargetSeconds;
+
     const inputArgs = [
       ...videoPaths.flatMap((filePath) => [
         '-t',
-        String(MAX_VIDEO_CLIP_SECONDS),
+        formatDuration(videoClipSeconds),
         '-i',
         filePath,
       ]),
@@ -162,7 +193,7 @@ export async function renderClipsOnServer(input: ServerRenderInput): Promise<Ser
     const videoFilters = videoPaths
       .map((_, i) => {
         return (
-          `[${i}:v]trim=duration=${MAX_VIDEO_CLIP_SECONDS},setpts=PTS-STARTPTS,` +
+          `[${i}:v]trim=duration=${formatDuration(videoClipSeconds)},setpts=PTS-STARTPTS,` +
           `scale=${VIDEO_WIDTH}:${VIDEO_HEIGHT}:force_original_aspect_ratio=decrease,` +
           `pad=${VIDEO_WIDTH}:${VIDEO_HEIGHT}:(ow-iw)/2:(oh-ih)/2,` +
           `setsar=1,fps=${VIDEO_FPS},format=yuv420p[v${i}]`
@@ -170,7 +201,12 @@ export async function renderClipsOnServer(input: ServerRenderInput): Promise<Ser
       })
       .join(';');
     const videoInputs = videoPaths.map((_, i) => `[v${i}]`).join('');
-    const videoConcat = `${videoInputs}concat=n=${videoPaths.length}:v=1:a=0[v]`;
+    const videoConcat = `${videoInputs}concat=n=${videoPaths.length}:v=1:a=0[vcat]`;
+    const videoFinalize = needsVideoLoop
+      ? `[vcat]loop=loop=-1:size=${loopFrameCount}:start=0,trim=duration=${formatDuration(
+          renderTargetSeconds,
+        )},setpts=PTS-STARTPTS[v]`
+      : `[vcat]trim=duration=${formatDuration(renderTargetSeconds)},setpts=PTS-STARTPTS[v]`;
 
     const audioOffset = videoPaths.length;
     const audioFilters = audioPaths
@@ -186,7 +222,9 @@ export async function renderClipsOnServer(input: ServerRenderInput): Promise<Ser
       ? `${audioInputs}concat=n=${audioPaths.length}:v=0:a=1[a]`
       : '';
 
-    const filterComplex = [videoFilters, videoConcat, audioFilters, audioConcat]
+    // Native phone clips are often shorter than the voiceover. Loop the b-roll
+    // sequence to avoid the browser freezing on the last frame while audio plays.
+    const filterComplex = [videoFilters, videoConcat, videoFinalize, audioFilters, audioConcat]
       .filter(Boolean)
       .join(';');
 
@@ -210,6 +248,8 @@ export async function renderClipsOnServer(input: ServerRenderInput): Promise<Ser
         'zerolatency',
         '-crf',
         '30',
+        '-r',
+        String(VIDEO_FPS),
         ...(audioPaths.length ? ['-c:a', 'aac', '-b:a', '96k'] : ['-an']),
         '-movflags',
         '+faststart',
@@ -225,7 +265,7 @@ export async function renderClipsOnServer(input: ServerRenderInput): Promise<Ser
 
     return {
       bytes,
-      durationSeconds: await probeDuration(outputPath),
+      durationSeconds: Math.round(await probeDuration(outputPath)),
       filename: `matcha-server-${runId}.mp4`,
     };
   } finally {

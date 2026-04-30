@@ -116,6 +116,10 @@ function PhoneVideoPreview({ src }: { src: string }) {
   );
 }
 
+function downloadFilename(submission: AdminReviewSubmission) {
+  return `${submission.submissionId}.mp4`;
+}
+
 export default async function AdminReviewsPage() {
   const { submissions, sourceLabel } = await listReviewsForAdminPage();
   const recorderHref = remoteRecorderHref();
@@ -211,6 +215,14 @@ export default async function AdminReviewsPage() {
                     <div className="rounded-md bg-cream/[0.04] px-3 py-2 text-sm leading-5 text-cream/70">
                       {submission.feedback}
                     </div>
+
+                    <a
+                      href={submission.previewUrl}
+                      download={downloadFilename(submission)}
+                      className="inline-flex h-10 items-center justify-center rounded-full border border-sage/40 bg-sage/15 px-4 text-sm font-semibold text-sage transition hover:bg-sage/25"
+                    >
+                      Download HD MP4
+                    </a>
                   </div>
                 </div>
               </article>

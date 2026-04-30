@@ -20,8 +20,8 @@ export type ServerRenderResult = {
 };
 
 const WORK_DIR = path.join(process.cwd(), '.local-review-data', 'server-renders');
-const VIDEO_WIDTH = 540;
-const VIDEO_HEIGHT = 960;
+const VIDEO_WIDTH = 1080;
+const VIDEO_HEIGHT = 1920;
 const VIDEO_FPS = 24;
 const MIN_VIDEO_CLIP_SECONDS = 5;
 const MAX_VIDEO_CLIP_SECONDS = 7;
@@ -176,7 +176,15 @@ export async function renderClipsOnServer(input: ServerRenderInput): Promise<Ser
     );
     const baseVideoDurationSeconds = cappedVideoDurations.reduce((total, duration) => total + duration, 0);
     const renderTargetSeconds =
-      hasVoiceover ? FINAL_VIDEO_MAX_SECONDS : Math.max(1, baseVideoDurationSeconds);
+      hasVoiceover
+        ? Math.max(
+            1,
+            Math.min(
+              FINAL_VIDEO_MAX_SECONDS,
+              audioDurationSeconds > 0 ? audioDurationSeconds : FINAL_VIDEO_MAX_SECONDS,
+            ),
+          )
+        : Math.max(1, baseVideoDurationSeconds);
     const loopFrameCount = Math.max(1, Math.ceil(baseVideoDurationSeconds * VIDEO_FPS));
 
     const inputArgs = [
@@ -226,11 +234,12 @@ export async function renderClipsOnServer(input: ServerRenderInput): Promise<Ser
       ? `${audioInputs}concat=n=${audioPaths.length}:v=0:a=1[acat]`
       : '';
     const audioFinalize = audioPaths.length
-      ? `[acat]atrim=duration=${FINAL_VIDEO_MAX_SECONDS},asetpts=PTS-STARTPTS[a]`
+      ? `[acat]atrim=duration=${formatDuration(renderTargetSeconds)},` +
+        `apad=whole_dur=${formatDuration(renderTargetSeconds)},asetpts=PTS-STARTPTS[a]`
       : '';
 
-    // Cap every voiceover render to a short-form 17 seconds. The b-roll loops
-    // only to that cap, and -shortest ends the file with the actual audio.
+    // Cap every voiceover render to a short-form 17 seconds, then make audio
+    // and video share one target duration so playback never freezes under speech.
     const filterComplex = [videoFilters, videoConcat, videoFinalize, audioFilters, audioConcat, audioFinalize]
       .filter(Boolean)
       .join(';');
@@ -257,7 +266,9 @@ export async function renderClipsOnServer(input: ServerRenderInput): Promise<Ser
         '30',
         '-r',
         String(VIDEO_FPS),
-        ...(audioPaths.length ? ['-shortest', '-c:a', 'aac', '-b:a', '96k'] : ['-an']),
+        ...(audioPaths.length ? ['-c:a', 'aac', '-b:a', '96k'] : ['-an']),
+        '-t',
+        formatDuration(renderTargetSeconds),
         '-movflags',
         '+faststart',
         '-avoid_negative_ts',

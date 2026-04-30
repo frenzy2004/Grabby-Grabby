@@ -1,5 +1,8 @@
 import Link from 'next/link';
-import { listAdminReviewSubmissions } from '@/lib/server/reviewStore';
+import {
+  listAdminReviewSubmissions,
+  type AdminReviewSubmission,
+} from '@/lib/server/reviewStore';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -32,6 +35,81 @@ function statusClass(status: string) {
   return 'border-sky-300 bg-sky-50 text-sky-900';
 }
 
+function remoteAdminConfig() {
+  const url = process.env.REMOTE_ADMIN_REVIEWS_URL;
+  const username = process.env.REMOTE_ADMIN_USERNAME;
+  const password = process.env.REMOTE_ADMIN_PASSWORD;
+
+  if (!url || !username || !password) return null;
+
+  return {
+    url,
+    authorization: `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`,
+  };
+}
+
+function remoteRecorderHref() {
+  const explicit = process.env.REMOTE_PUBLIC_RECORDER_URL;
+  if (explicit) return explicit;
+
+  const remote = remoteAdminConfig();
+  if (!remote) return '/c/sageandstone';
+
+  try {
+    return new URL('/c/sageandstone', remote.url).toString();
+  } catch {
+    return '/c/sageandstone';
+  }
+}
+
+function absolutizePreviewUrl(previewUrl: string, sourceUrl: string) {
+  try {
+    return new URL(previewUrl, sourceUrl).toString();
+  } catch {
+    return previewUrl;
+  }
+}
+
+async function listReviewsForAdminPage() {
+  const remote = remoteAdminConfig();
+  if (!remote) {
+    return {
+      submissions: await listAdminReviewSubmissions(),
+      sourceLabel: 'local',
+    };
+  }
+
+  try {
+    const response = await fetch(remote.url, {
+      headers: {
+        Authorization: remote.authorization,
+      },
+      cache: 'no-store',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Remote admin returned ${response.status}`);
+    }
+
+    const payload = (await response.json()) as { submissions?: AdminReviewSubmission[] };
+    const submissions = Array.isArray(payload.submissions) ? payload.submissions : [];
+
+    return {
+      submissions: submissions.map((submission) => ({
+        ...submission,
+        previewUrl: absolutizePreviewUrl(submission.previewUrl, remote.url),
+      })),
+      sourceLabel: 'hugging face',
+    };
+  } catch (err) {
+    console.warn('[matcha-moments/admin] failed to load remote submissions', err);
+    return {
+      submissions: await listAdminReviewSubmissions(),
+      sourceLabel: 'local fallback',
+    };
+  }
+}
+
 function PhoneVideoPreview({ src }: { src: string }) {
   return (
     <div className="mx-auto w-full max-w-[170px] overflow-hidden rounded-[18px] bg-black shadow-[0_18px_45px_rgba(0,0,0,0.28)]">
@@ -47,7 +125,8 @@ function PhoneVideoPreview({ src }: { src: string }) {
 }
 
 export default async function AdminReviewsPage() {
-  const submissions = await listAdminReviewSubmissions();
+  const { submissions, sourceLabel } = await listReviewsForAdminPage();
+  const recorderHref = remoteRecorderHref();
 
   return (
     <main className="min-h-dvh bg-[#171512] px-5 py-6 text-cream sm:px-8">
@@ -56,9 +135,12 @@ export default async function AdminReviewsPage() {
           <div>
             <div className="text-eyebrow mb-2 text-sage">office prototype</div>
             <h1 className="text-display text-[34px] text-cream">Review submissions</h1>
+            <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.14em] text-cream/45">
+              Source: {sourceLabel}
+            </p>
           </div>
           <Link
-            href="/c/sageandstone"
+            href={recorderHref}
             className="inline-flex h-11 items-center justify-center rounded-full border border-cream/20 px-5 text-sm text-cream transition hover:bg-cream/10"
           >
             Open recorder

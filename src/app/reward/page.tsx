@@ -5,7 +5,6 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 import { Button } from '@/components/Button';
 import { Confetti } from '@/components/Confetti';
-import { PhoneViewport } from '@/components/PhoneViewport';
 import { RewardCard } from '@/components/RewardCard';
 import { recordingStore } from '@/lib/recordingStore';
 
@@ -28,8 +27,7 @@ function RewardScreen() {
   };
 
   return (
-    <PhoneViewport>
-      <main
+    <main
       className="relative flex min-h-dvh flex-col overflow-hidden bg-cream"
       style={{
         backgroundImage:
@@ -70,7 +68,6 @@ function RewardScreen() {
           ↺ Restart prototype
         </Button>
       </footer>
-      </main>
-    </PhoneViewport>
+    </main>
   );
 }

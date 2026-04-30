@@ -19,55 +19,6 @@ body {
   box-sizing: border-box;
 }
 
-.phone-stage {
-  min-height: 100dvh;
-  background: #F5EFE2;
-}
-
-.phone-stage-dark {
-  background: #0e0d0b;
-}
-
-.phone-screen {
-  min-height: 100dvh;
-  overflow: hidden;
-  background: #F5EFE2;
-}
-
-.phone-stage-dark .phone-screen {
-  background: #0e0d0b;
-}
-
-@media (min-width: 640px) {
-  .phone-stage {
-    display: flex;
-    min-height: 100dvh;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-    background: #F5EFE2;
-  }
-
-  .phone-stage-dark {
-    background: #0e0d0b;
-  }
-
-  .phone-screen {
-    position: relative;
-    height: min(932px, calc(100dvh - 48px));
-    min-height: 0;
-    width: min(430px, calc(100vw - 48px));
-    overflow: hidden;
-    border-radius: 28px;
-    box-shadow: 0 24px 70px rgba(42, 37, 32, 0.18);
-  }
-
-  .phone-screen > main {
-    height: 100%;
-    min-height: 100%;
-  }
-}
-
 @layer utilities {
   .scrollbar-hide::-webkit-scrollbar {
     display: none;

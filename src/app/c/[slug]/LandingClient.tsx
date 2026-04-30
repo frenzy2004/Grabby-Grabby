@@ -4,7 +4,6 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/Button';
 import { MatchaCircle } from '@/components/MatchaCircle';
-import { PhoneViewport } from '@/components/PhoneViewport';
 import { recordingStore } from '@/lib/recordingStore';
 import type { PublicReviewCampaign } from '@/lib/reviews/types';
 
@@ -30,8 +29,7 @@ export function LandingClient({ slug, tableId, campaign }: Props) {
   };
 
   return (
-    <PhoneViewport>
-      <main className="flex min-h-dvh flex-col bg-cream">
+    <main className="flex min-h-dvh flex-col bg-cream">
       <section className="flex flex-1 flex-col items-center justify-center px-7 pt-6 text-center">
         <div className="mb-7 flex items-center gap-2.5 font-serif italic text-sm text-muted">
           <span className="h-px w-6 bg-muted/50" aria-hidden />
@@ -74,7 +72,6 @@ export function LandingClient({ slug, tableId, campaign }: Props) {
           </p>
         ) : null}
       </footer>
-      </main>
-    </PhoneViewport>
+    </main>
   );
 }

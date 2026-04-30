@@ -4,7 +4,6 @@ import { CheckCircle2, Loader2, RotateCcw } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/Button';
-import { PhoneViewport } from '@/components/PhoneViewport';
 import { RenderShimmer } from '@/components/RenderShimmer';
 import { useSubmissionPolling } from '@/hooks/useSubmissionPolling';
 import { concatClips } from '@/lib/ffmpeg';
@@ -147,8 +146,7 @@ export default function PreviewPage() {
   );
 
   return (
-    <PhoneViewport>
-      <main className="flex min-h-dvh flex-col bg-cream">
+    <main className="flex min-h-dvh flex-col bg-cream">
       <section className="flex flex-1 flex-col px-7 pt-8">
         <div className="mb-6">
           {isReady ? (
@@ -171,7 +169,7 @@ export default function PreviewPage() {
         </div>
 
         <div className="rounded-[22px] border border-ink/10 bg-paper p-5 shadow-[0_18px_50px_rgba(42,37,32,0.12)]">
-          <div className="relative mx-auto mb-5 flex aspect-[9/16] max-h-[460px] w-full max-w-[260px] items-center justify-center overflow-hidden rounded-[22px] bg-[#15120f] shadow-[0_18px_45px_rgba(42,37,32,0.14)]">
+          <div className="relative mb-5 flex aspect-[9/12] max-h-[420px] items-center justify-center overflow-hidden rounded-[18px] bg-[#15120f]">
             {!isReady ? (
               <div className="flex flex-col items-center px-5 text-center">
                 <RenderShimmer />
@@ -266,7 +264,6 @@ export default function PreviewPage() {
           <Button disabled>Processing...</Button>
         )}
       </footer>
-      </main>
-    </PhoneViewport>
+    </main>
   );
 }

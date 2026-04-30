@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/Button';
-import { PhoneViewport } from '@/components/PhoneViewport';
 
 const DEFAULT_SLUG = 'sageandstone';
 
@@ -24,8 +23,7 @@ export default function HomePage() {
   }, []);
 
   return (
-    <PhoneViewport>
-      <main className="flex min-h-dvh flex-col bg-cream">
+    <main className="flex min-h-dvh flex-col bg-cream">
       <section className="flex flex-1 flex-col items-center justify-center px-7 text-center">
         <div className="relative mb-5 h-40 w-40 overflow-hidden rounded-2xl border border-ink/10 bg-white p-3.5">
           <div
@@ -71,7 +69,6 @@ export default function HomePage() {
           Dev note: in production, the QR camera scan deep-links to /c/[slug].
         </p>
       </footer>
-      </main>
-    </PhoneViewport>
+    </main>
   );
 }

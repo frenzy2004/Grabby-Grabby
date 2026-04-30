@@ -487,7 +487,11 @@ function BrowserMediaRecorder({
         <div className="flex-1" />
 
         <div className="flex flex-col items-center gap-4 pb-[max(env(safe-area-inset-bottom),24px)]">
-          <RecordingBadge elapsedMs={elapsedMs} visible={state === 'recording'} />
+          <RecordingBadge
+            elapsedMs={elapsedMs}
+            maxMs={prompt.maxSeconds * 1000}
+            visible={state === 'recording'}
+          />
 
           {error ? (
             <div className="mx-4 rounded-2xl bg-red-500/90 px-4 py-2 text-sm">

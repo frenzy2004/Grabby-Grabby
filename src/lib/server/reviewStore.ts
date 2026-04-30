@@ -125,7 +125,7 @@ const SAGE_AND_STONE: PublicReviewCampaign = {
       tip: 'Voice only. Say the dish name and describe what is on the plate.',
       mediaType: 'audio',
       camera: 'front',
-      maxSeconds: 8,
+      maxSeconds: 7,
       optional: false,
     },
     {
@@ -134,7 +134,7 @@ const SAGE_AND_STONE: PublicReviewCampaign = {
       tip: 'Voice only. Mention the flavor, texture, portion, or what stood out.',
       mediaType: 'audio',
       camera: 'front',
-      maxSeconds: 12,
+      maxSeconds: 10,
       optional: false,
     },
     {

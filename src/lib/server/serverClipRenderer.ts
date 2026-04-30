@@ -26,7 +26,7 @@ const VIDEO_FPS = 24;
 const MIN_VIDEO_CLIP_SECONDS = 5;
 const MAX_VIDEO_CLIP_SECONDS = 7;
 const MAX_AUDIO_CLIP_SECONDS = 12;
-const AUDIO_VIDEO_SAFETY_SECONDS = 0.2;
+const FINAL_VIDEO_MAX_SECONDS = 17;
 
 function safeExt(ext: string) {
   const normalized = ext.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -159,21 +159,25 @@ export async function renderClipsOnServer(input: ServerRenderInput): Promise<Ser
       Promise.all(audioPaths.map(probeDuration)),
     ]);
 
+    const hasVoiceover = audioPaths.length > 0;
     const audioDurationSeconds = audioDurations.reduce((total, duration) => total + duration, 0);
     const videoClipSeconds =
-      audioDurationSeconds > 0
-        ? clamp(Math.ceil(audioDurationSeconds / videoPaths.length), MIN_VIDEO_CLIP_SECONDS, MAX_VIDEO_CLIP_SECONDS)
-        : MIN_VIDEO_CLIP_SECONDS;
+      hasVoiceover
+        ? MAX_VIDEO_CLIP_SECONDS
+        : audioDurationSeconds > 0
+          ? clamp(
+              Math.ceil(audioDurationSeconds / videoPaths.length),
+              MIN_VIDEO_CLIP_SECONDS,
+              MAX_VIDEO_CLIP_SECONDS,
+            )
+          : MIN_VIDEO_CLIP_SECONDS;
     const cappedVideoDurations = videoDurations.map((duration) =>
       duration > 0 ? Math.min(duration, videoClipSeconds) : videoClipSeconds,
     );
     const baseVideoDurationSeconds = cappedVideoDurations.reduce((total, duration) => total + duration, 0);
     const renderTargetSeconds =
-      audioDurationSeconds > 0
-        ? Math.max(1, audioDurationSeconds + AUDIO_VIDEO_SAFETY_SECONDS)
-        : Math.max(1, baseVideoDurationSeconds);
+      hasVoiceover ? FINAL_VIDEO_MAX_SECONDS : Math.max(1, baseVideoDurationSeconds);
     const loopFrameCount = Math.max(1, Math.ceil(baseVideoDurationSeconds * VIDEO_FPS));
-    const needsVideoLoop = audioDurationSeconds > 0 && baseVideoDurationSeconds + 0.1 < renderTargetSeconds;
 
     const inputArgs = [
       ...videoPaths.flatMap((filePath) => [
@@ -202,7 +206,7 @@ export async function renderClipsOnServer(input: ServerRenderInput): Promise<Ser
       .join(';');
     const videoInputs = videoPaths.map((_, i) => `[v${i}]`).join('');
     const videoConcat = `${videoInputs}concat=n=${videoPaths.length}:v=1:a=0[vcat]`;
-    const videoFinalize = needsVideoLoop
+    const videoFinalize = hasVoiceover
       ? `[vcat]loop=loop=-1:size=${loopFrameCount}:start=0,trim=duration=${formatDuration(
           renderTargetSeconds,
         )},setpts=PTS-STARTPTS[v]`
@@ -219,12 +223,15 @@ export async function renderClipsOnServer(input: ServerRenderInput): Promise<Ser
       .join(';');
     const audioInputs = audioPaths.map((_, i) => `[a${i}]`).join('');
     const audioConcat = audioPaths.length
-      ? `${audioInputs}concat=n=${audioPaths.length}:v=0:a=1[a]`
+      ? `${audioInputs}concat=n=${audioPaths.length}:v=0:a=1[acat]`
+      : '';
+    const audioFinalize = audioPaths.length
+      ? `[acat]atrim=duration=${FINAL_VIDEO_MAX_SECONDS},asetpts=PTS-STARTPTS[a]`
       : '';
 
-    // Native phone clips are often shorter than the voiceover. Loop the b-roll
-    // sequence to avoid the browser freezing on the last frame while audio plays.
-    const filterComplex = [videoFilters, videoConcat, videoFinalize, audioFilters, audioConcat]
+    // Cap every voiceover render to a short-form 17 seconds. The b-roll loops
+    // only to that cap, and -shortest ends the file with the actual audio.
+    const filterComplex = [videoFilters, videoConcat, videoFinalize, audioFilters, audioConcat, audioFinalize]
       .filter(Boolean)
       .join(';');
 
@@ -250,7 +257,7 @@ export async function renderClipsOnServer(input: ServerRenderInput): Promise<Ser
         '30',
         '-r',
         String(VIDEO_FPS),
-        ...(audioPaths.length ? ['-c:a', 'aac', '-b:a', '96k'] : ['-an']),
+        ...(audioPaths.length ? ['-shortest', '-c:a', 'aac', '-b:a', '96k'] : ['-an']),
         '-movflags',
         '+faststart',
         '-avoid_negative_ts',

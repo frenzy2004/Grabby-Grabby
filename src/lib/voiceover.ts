@@ -12,6 +12,8 @@ export type VoiceoverResult = {
   filename: string;
 };
 
+const FINAL_VIDEO_MAX_SECONDS = 17;
+
 async function createFFmpeg(): Promise<FFmpeg> {
   const ffmpeg = new FFmpeg();
   const coreBaseUrl = 'https://unpkg.com/@ffmpeg/core@0.12.9/dist/umd';
@@ -84,7 +86,10 @@ export async function addVoiceoverToVideo(
       .map((_, i) => `[${i}:a]aresample=48000,asetpts=PTS-STARTPTS[a${i}]`)
       .join(';');
     const concatInputs = audioFiles.map((_, i) => `[a${i}]`).join('');
-    const filterComplex = `${normalizedAudio};${concatInputs}concat=n=${audioFiles.length}:v=0:a=1[a]`;
+    const filterComplex =
+      `${normalizedAudio};` +
+      `${concatInputs}concat=n=${audioFiles.length}:v=0:a=1,` +
+      `atrim=duration=${FINAL_VIDEO_MAX_SECONDS},asetpts=PTS-STARTPTS[a]`;
 
     await runOrThrow([
       '-y',
@@ -110,6 +115,9 @@ export async function addVoiceoverToVideo(
       '0:v:0',
       '-map',
       '1:a:0',
+      '-t',
+      String(FINAL_VIDEO_MAX_SECONDS),
+      '-shortest',
       '-c:v',
       'copy',
       '-c:a',

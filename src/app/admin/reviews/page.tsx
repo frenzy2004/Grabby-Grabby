@@ -62,14 +62,6 @@ function remoteRecorderHref() {
   }
 }
 
-function absolutizePreviewUrl(previewUrl: string, sourceUrl: string) {
-  try {
-    return new URL(previewUrl, sourceUrl).toString();
-  } catch {
-    return previewUrl;
-  }
-}
-
 async function listReviewsForAdminPage() {
   const remote = remoteAdminConfig();
   if (!remote) {
@@ -97,7 +89,7 @@ async function listReviewsForAdminPage() {
     return {
       submissions: submissions.map((submission) => ({
         ...submission,
-        previewUrl: absolutizePreviewUrl(submission.previewUrl, remote.url),
+        previewUrl: `/api/admin/remote-video/${encodeURIComponent(submission.submissionId)}`,
       })),
       sourceLabel: 'hugging face',
     };

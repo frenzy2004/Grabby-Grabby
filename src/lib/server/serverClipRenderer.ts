@@ -3,7 +3,8 @@ import path from 'path';
 import { spawn } from 'child_process';
 
 type ClipFile = {
-  file: File;
+  file?: File;
+  filePath?: string;
   ext: string;
 };
 
@@ -77,6 +78,13 @@ async function writeClip(file: File, filePath: string) {
   await writeFile(filePath, bytes);
 }
 
+async function prepareClipSource(clip: ClipFile, fallbackPath: string) {
+  if (clip.filePath) return clip.filePath;
+  if (!clip.file) throw new Error('Clip source is missing.');
+  await writeClip(clip.file, fallbackPath);
+  return fallbackPath;
+}
+
 async function probeDuration(filePath: string) {
   try {
     const args = [
@@ -127,15 +135,13 @@ export async function renderClipsOnServer(input: ServerRenderInput): Promise<Ser
     for (let i = 0; i < input.videoClips.length; i++) {
       const clip = input.videoClips[i]!;
       const filePath = path.join(runDir, `video-${i}.${safeExt(clip.ext)}`);
-      await writeClip(clip.file, filePath);
-      videoPaths.push(filePath);
+      videoPaths.push(await prepareClipSource(clip, filePath));
     }
 
     for (let i = 0; i < input.audioClips.length; i++) {
       const clip = input.audioClips[i]!;
       const filePath = path.join(runDir, `audio-${i}.${safeExt(clip.ext)}`);
-      await writeClip(clip.file, filePath);
-      audioPaths.push(filePath);
+      audioPaths.push(await prepareClipSource(clip, filePath));
     }
 
     const inputArgs = [

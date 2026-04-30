@@ -54,12 +54,35 @@ export type SubmitClip = {
   ext: 'webm' | 'mp4' | 'mov';
 };
 
+export type UploadedClipRef = {
+  sessionId: string;
+  step: number;
+  mediaType: 'video' | 'audio';
+  ext: 'webm' | 'mp4' | 'mov';
+  size: number;
+};
+
 export type SubmitClipsInput = Omit<
   SubmitInput,
   'durationSeconds' | 'video' | 'videoFileName'
 > & {
   videoClips: SubmitClip[];
   audioClips: SubmitClip[];
+};
+
+export type UploadClipInput = {
+  sessionId: string;
+  step: number;
+  mediaType: 'video' | 'audio';
+  blob: Blob;
+  ext: 'webm' | 'mp4' | 'mov';
+};
+
+export type SubmitSessionInput = Omit<
+  SubmitInput,
+  'durationSeconds' | 'video' | 'videoFileName'
+> & {
+  sessionId: string;
 };
 
 export async function submit(input: SubmitInput): Promise<PublicSubmitResult> {
@@ -106,6 +129,47 @@ export async function submitClips(input: SubmitClipsInput): Promise<PublicSubmit
   });
 
   const res = await fetch(endpoint('/api/public/reviews/submit-clips'), {
+    method: 'POST',
+    body: form,
+  });
+
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((body as { error?: string }).error || `Submit failed (${res.status})`);
+  }
+  return body as PublicSubmitResult;
+}
+
+export async function uploadClip(input: UploadClipInput): Promise<UploadedClipRef> {
+  const form = new FormData();
+  form.append('sessionId', input.sessionId);
+  form.append('step', String(input.step));
+  form.append('mediaType', input.mediaType);
+  form.append('ext', input.ext);
+  form.append('clip', input.blob, `step-${input.step}.${input.ext}`);
+
+  const res = await fetch(endpoint('/api/public/reviews/upload-clip'), {
+    method: 'POST',
+    body: form,
+  });
+
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((body as { error?: string }).error || `Clip upload failed (${res.status})`);
+  }
+  return (body as { clip: UploadedClipRef }).clip;
+}
+
+export async function submitSession(input: SubmitSessionInput): Promise<PublicSubmitResult> {
+  const form = new FormData();
+  form.append('slug', input.slug);
+  form.append('consentAccepted', input.consentAccepted ? 'true' : 'false');
+  form.append('socialHandle', input.socialHandle ?? '');
+  form.append('deviceKey', input.deviceKey);
+  form.append('sessionId', input.sessionId);
+  if (input.tableId) form.append('tableId', input.tableId);
+
+  const res = await fetch(endpoint('/api/public/reviews/submit-session'), {
     method: 'POST',
     body: form,
   });

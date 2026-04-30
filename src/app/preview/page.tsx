@@ -8,7 +8,7 @@ import { MobileShell } from '@/components/MobileShell';
 import { RenderShimmer } from '@/components/RenderShimmer';
 import { useSubmissionPolling } from '@/hooks/useSubmissionPolling';
 import { concatClips } from '@/lib/ffmpeg';
-import { submit, submitClips } from '@/lib/humeoApi';
+import { submit, submitSession, uploadClip } from '@/lib/humeoApi';
 import { recordingStore, useRecordingStore } from '@/lib/recordingStore';
 import type { PublicSubmitResult } from '@/lib/reviews/types';
 import { ensureDeviceKey } from '@/lib/utils';
@@ -16,6 +16,7 @@ import { addVoiceoverToVideo } from '@/lib/voiceover';
 
 type Phase =
   | { kind: 'idle' }
+  | { kind: 'uploading_clips'; progress: number }
   | { kind: 'server_processing' }
   | { kind: 'concatenating'; progress: number }
   | { kind: 'mixing'; progress: number }
@@ -75,15 +76,51 @@ export default function PreviewPage() {
       const shouldUseServerPipeline = videoClips.some((clip) => clip.needsOptimization);
 
       if (shouldUseServerPipeline) {
+        const clipsToUpload = [...videoClips, ...audioClips];
+        let uploadedCount = 0;
+        setPhase({ kind: 'uploading_clips', progress: 0 });
+
+        await Promise.all(
+          clipsToUpload.map(async (clip) => {
+            const existingState = recordingStore.getClipUploadState(clip.step);
+            if (existingState.status === 'uploaded') {
+              uploadedCount += 1;
+              setPhase({
+                kind: 'uploading_clips',
+                progress: uploadedCount / clipsToUpload.length,
+              });
+              return;
+            }
+
+            let promise = recordingStore.getClipUploadPromise(clip.step);
+            if (!promise) {
+              promise = uploadClip({
+                sessionId: store.sessionId,
+                step: clip.step,
+                mediaType: clip.mediaType,
+                blob: clip.blob,
+                ext: clip.ext,
+              });
+              recordingStore.startClipUpload(clip.step, promise);
+            }
+
+            await promise;
+            uploadedCount += 1;
+            setPhase({
+              kind: 'uploading_clips',
+              progress: uploadedCount / clipsToUpload.length,
+            });
+          }),
+        );
+
         setPhase({ kind: 'server_processing' });
-        const result = await submitClips({
+        const result = await submitSession({
           slug: store.slug ?? 'sageandstone',
           consentAccepted: true,
           socialHandle: store.socialHandle || undefined,
           deviceKey: ensureDeviceKey(),
           tableId: store.tableId,
-          videoClips: videoClips.map((clip) => ({ blob: clip.blob, ext: clip.ext })),
-          audioClips: audioClips.map((clip) => ({ blob: clip.blob, ext: clip.ext })),
+          sessionId: store.sessionId,
         });
 
         setPhase({ kind: 'polling', result });
@@ -125,7 +162,14 @@ export default function PreviewPage() {
         message: pipelineErrorMessage(err) || 'Submit failed',
       });
     }
-  }, [router, store.orderedClips, store.slug, store.socialHandle, store.tableId]);
+  }, [
+    router,
+    store.orderedClips,
+    store.sessionId,
+    store.slug,
+    store.socialHandle,
+    store.tableId,
+  ]);
 
   useEffect(() => {
     if (triggeredRef.current) return;
@@ -158,6 +202,17 @@ export default function PreviewPage() {
     () => [
       ...(hasNativeVideoClips
         ? [
+            {
+              label: 'Uploading phone shots',
+              done:
+                phase.kind === 'server_processing' ||
+                phase.kind === 'concatenating' ||
+                phase.kind === 'mixing' ||
+                phase.kind === 'uploading' ||
+                phase.kind === 'polling' ||
+                phase.kind === 'ready',
+              current: phase.kind === 'uploading_clips',
+            },
             {
               label: 'Preparing phone shots',
               done:
@@ -267,6 +322,12 @@ export default function PreviewPage() {
               </li>
             ))}
           </ul>
+
+          {phase.kind === 'uploading_clips' ? (
+            <p className="mt-4 text-center font-mono text-[10px] uppercase tracking-[0.15em] text-muted">
+              Finishing uploads - {Math.round(phase.progress * 100)}%
+            </p>
+          ) : null}
 
           {phase.kind === 'server_processing' ? (
             <p className="mt-4 text-center font-mono text-[10px] uppercase tracking-[0.15em] text-muted">

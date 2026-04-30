@@ -9,6 +9,7 @@ import { RecordButton } from '@/components/RecordButton';
 import { RecordingBadge } from '@/components/RecordingBadge';
 import { MobileShell } from '@/components/MobileShell';
 import { useGuidedRecording } from '@/hooks/useGuidedRecording';
+import { uploadClip } from '@/lib/humeoApi';
 import { recordingStore, useRecordingStore } from '@/lib/recordingStore';
 import type { PublicReviewCampaign } from '@/lib/reviews/types';
 
@@ -54,14 +55,33 @@ export function GuidedRecordingClient({ slug, tableId, campaign }: Props) {
 
   const handleClipReady = useCallback(
     (clip: ClipReadyInput) => {
+      const mediaType = currentPrompt?.mediaType ?? 'video';
       recordingStore.setClip({
         step: stepNum,
-        mediaType: currentPrompt?.mediaType ?? 'video',
+        mediaType,
         blob: clip.blob,
         durationSeconds: clip.durationSeconds,
         ext: clip.ext,
         needsOptimization: clip.needsOptimization,
       });
+
+      const shouldUploadForServer =
+        clip.needsOptimization ||
+        recordingStore.snapshot().orderedClips.some((recorded) => recorded.needsOptimization);
+
+      if (shouldUploadForServer) {
+        const { sessionId } = recordingStore.snapshot();
+        recordingStore.startClipUpload(
+          stepNum,
+          uploadClip({
+            sessionId,
+            step: stepNum,
+            mediaType,
+            blob: clip.blob,
+            ext: clip.ext,
+          }),
+        );
+      }
 
       goNext();
     },
@@ -172,7 +192,19 @@ function useVideoCaptureMode(mediaType: 'video' | 'audio') {
 
     const params = new URLSearchParams(window.location.search);
     const explicitCaptureMode = params.get('capture');
-    setMode(explicitCaptureMode === 'native' ? 'native' : 'browser');
+    if (explicitCaptureMode === 'browser') {
+      setMode('browser');
+      return;
+    }
+
+    const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false;
+    const narrowViewport = window.matchMedia?.('(max-width: 760px)').matches ?? false;
+    const mobileUserAgent = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    setMode(
+      explicitCaptureMode === 'native' || coarsePointer || narrowViewport || mobileUserAgent
+        ? 'native'
+        : 'browser',
+    );
   }, [mediaType]);
 
   return mode;
@@ -317,7 +349,7 @@ function NativeVideoCapture({
               <Camera className="h-14 w-14 text-sage" />
             </button>
             <p className="mt-5 max-w-[280px] text-sm leading-6 text-white/70">
-              Use your phone camera for the cleanest food shot. We will trim and stitch it at the end.
+              Use your phone camera for the cleanest food shot. Record 3-5 seconds; it uploads while you continue.
             </p>
             {error ? (
               <div className="mt-5 rounded-2xl bg-red-500/90 px-4 py-2 text-sm">

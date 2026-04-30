@@ -1,8 +1,8 @@
 'use client';
 
-import { ChevronLeft, Mic, SkipForward } from 'lucide-react';
+import { Camera, ChevronLeft, Loader2, Mic, SkipForward } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ProgressPips } from '@/components/ProgressPips';
 import { PromptCard } from '@/components/PromptCard';
 import { RecordButton } from '@/components/RecordButton';
@@ -107,6 +107,313 @@ type InnerProps = {
 };
 
 function RecorderInner({
+  stepNum,
+  totalSteps,
+  doneCount,
+  prompt,
+  onClipReady,
+  onSkip,
+  onBack,
+}: InnerProps) {
+  const mediaType = prompt.mediaType ?? 'video';
+  const captureMode = useVideoCaptureMode(mediaType);
+
+  if (mediaType === 'video' && captureMode === 'native') {
+    return (
+      <NativeVideoCapture
+        stepNum={stepNum}
+        totalSteps={totalSteps}
+        doneCount={doneCount}
+        prompt={prompt}
+        onClipReady={onClipReady}
+        onSkip={onSkip}
+        onBack={onBack}
+      />
+    );
+  }
+
+  if (mediaType === 'video' && captureMode === 'checking') {
+    return (
+      <StaticCaptureShell
+        stepNum={stepNum}
+        totalSteps={totalSteps}
+        doneCount={doneCount}
+        prompt={prompt}
+        onBack={onBack}
+      />
+    );
+  }
+
+  return (
+    <BrowserMediaRecorder
+      stepNum={stepNum}
+      totalSteps={totalSteps}
+      doneCount={doneCount}
+      prompt={prompt}
+      onClipReady={onClipReady}
+      onSkip={onSkip}
+      onBack={onBack}
+    />
+  );
+}
+
+function useVideoCaptureMode(mediaType: 'video' | 'audio') {
+  const [mode, setMode] = useState<'checking' | 'native' | 'browser'>(
+    mediaType === 'video' ? 'checking' : 'browser',
+  );
+
+  useEffect(() => {
+    if (mediaType !== 'video') {
+      setMode('browser');
+      return;
+    }
+
+    const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false;
+    const narrowViewport = window.matchMedia?.('(max-width: 760px)').matches ?? false;
+    const mobileUserAgent = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    setMode(coarsePointer || narrowViewport || mobileUserAgent ? 'native' : 'browser');
+  }, [mediaType]);
+
+  return mode;
+}
+
+function extFromFile(file: File): 'webm' | 'mp4' | 'mov' {
+  const name = file.name.toLowerCase();
+  const type = file.type.toLowerCase();
+  if (name.endsWith('.mov') || type.includes('quicktime')) return 'mov';
+  if (name.endsWith('.mp4') || type.includes('mp4')) return 'mp4';
+  return 'webm';
+}
+
+async function probeVideoDuration(file: File, fallbackSeconds: number) {
+  return await new Promise<number>((resolve) => {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    let settled = false;
+
+    const finish = (duration: number) => {
+      if (settled) return;
+      settled = true;
+      URL.revokeObjectURL(url);
+      resolve(duration);
+    };
+
+    const timer = window.setTimeout(() => finish(fallbackSeconds), 4000);
+    video.preload = 'metadata';
+    video.muted = true;
+    video.onloadedmetadata = () => {
+      window.clearTimeout(timer);
+      finish(Number.isFinite(video.duration) ? Math.max(0, video.duration) : fallbackSeconds);
+    };
+    video.onerror = () => {
+      window.clearTimeout(timer);
+      finish(fallbackSeconds);
+    };
+    video.src = url;
+  });
+}
+
+function StaticCaptureShell({
+  stepNum,
+  totalSteps,
+  doneCount,
+  prompt,
+  onBack,
+}: Pick<InnerProps, 'stepNum' | 'totalSteps' | 'doneCount' | 'prompt' | 'onBack'>) {
+  return (
+    <MobileShell tone="dark">
+      <main className="relative flex min-h-dvh flex-col bg-[#0e0d0b] text-white">
+        <div
+          className="absolute inset-0 bg-[radial-gradient(circle_at_50%_35%,rgba(184,201,168,0.22),transparent_34%),linear-gradient(160deg,#15130f,#272119_55%,#0e0d0b)]"
+          aria-hidden
+        />
+        <div className="relative flex flex-1 flex-col">
+          <div className="pt-[max(env(safe-area-inset-top),16px)]">
+            <ProgressPips total={totalSteps} current={stepNum} doneCount={doneCount} />
+          </div>
+
+          <div className="px-4 pt-8">
+            <PromptCard
+              step={stepNum}
+              totalSteps={totalSteps}
+              title={prompt.title}
+              tip={prompt.tip}
+              label="Shot"
+              optional={prompt.optional}
+            />
+          </div>
+
+          <div className="flex flex-1 items-center justify-center px-8 text-center">
+            <Loader2 className="h-8 w-8 animate-spin text-sage" />
+          </div>
+
+          <div className="pb-[max(env(safe-area-inset-bottom),24px)]">
+            <button
+              type="button"
+              onClick={onBack}
+              className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-white/10 backdrop-blur"
+              aria-label="Previous"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+      </main>
+    </MobileShell>
+  );
+}
+
+function NativeVideoCapture({
+  stepNum,
+  totalSteps,
+  doneCount,
+  prompt,
+  onClipReady,
+  onSkip,
+  onBack,
+}: InnerProps) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [status, setStatus] = useState<'ready' | 'importing'>('ready');
+  const [error, setError] = useState<string | null>(null);
+
+  const handleChooseFile = () => {
+    setError(null);
+    inputRef.current?.click();
+  };
+
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (!file) return;
+
+    const looksLikeVideo =
+      file.type.startsWith('video/') || /\.(webm|mp4|mov)$/i.test(file.name);
+    if (!looksLikeVideo || file.size <= 0) {
+      setError('That file was not a usable video. Please record this shot again.');
+      return;
+    }
+
+    setStatus('importing');
+    setError(null);
+    const durationSeconds = await probeVideoDuration(file, prompt.maxSeconds);
+    setStatus('ready');
+
+    onClipReady({
+      blob: file,
+      durationSeconds: Math.max(1, Math.round(durationSeconds || prompt.maxSeconds)),
+      ext: extFromFile(file),
+    });
+  };
+
+  return (
+    <MobileShell tone="dark">
+      <main className="relative flex min-h-dvh flex-col bg-[#0e0d0b] text-white">
+        <div
+          className="absolute inset-0 bg-[radial-gradient(circle_at_50%_30%,rgba(184,201,168,0.24),transparent_36%),linear-gradient(160deg,#17140f,#2b241b_58%,#0e0d0b)]"
+          aria-hidden
+        />
+
+        <input
+          ref={inputRef}
+          type="file"
+          accept="video/*"
+          capture={prompt.camera === 'rear' ? 'environment' : 'user'}
+          className="sr-only"
+          onChange={handleFileChange}
+        />
+
+        <div className="relative flex flex-1 flex-col">
+          <div className="pt-[max(env(safe-area-inset-top),16px)]">
+            <ProgressPips total={totalSteps} current={stepNum} doneCount={doneCount} />
+          </div>
+
+          <div className="px-4 pt-8">
+            <PromptCard
+              step={stepNum}
+              totalSteps={totalSteps}
+              title={prompt.title}
+              tip={prompt.tip}
+              label="Shot"
+              optional={prompt.optional}
+            />
+          </div>
+
+          <div className="flex flex-1 flex-col items-center justify-center px-8 text-center">
+            <button
+              type="button"
+              onClick={handleChooseFile}
+              disabled={status === 'importing'}
+              className="flex h-32 w-32 items-center justify-center rounded-full border border-white/15 bg-white/10 shadow-[0_24px_80px_rgba(0,0,0,0.35)] backdrop-blur-md transition active:scale-95 disabled:opacity-50"
+              aria-label="Open phone camera"
+            >
+              {status === 'importing' ? (
+                <Loader2 className="h-12 w-12 animate-spin text-sage" />
+              ) : (
+                <Camera className="h-14 w-14 text-sage" />
+              )}
+            </button>
+            <p className="mt-5 max-w-[280px] text-sm leading-6 text-white/70">
+              Use your phone camera for the cleanest food shot. Keep it short and steady.
+            </p>
+            {error ? (
+              <div className="mt-5 rounded-2xl bg-red-500/90 px-4 py-2 text-sm">
+                {error}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="flex flex-col items-center gap-4 pb-[max(env(safe-area-inset-bottom),24px)]">
+            <div className="flex items-center justify-center gap-10">
+              <button
+                type="button"
+                onClick={onBack}
+                disabled={status === 'importing'}
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 backdrop-blur disabled:opacity-40"
+                aria-label="Previous"
+              >
+                <ChevronLeft className="h-5 w-5" />
+              </button>
+
+              <button
+                type="button"
+                onClick={handleChooseFile}
+                disabled={status === 'importing'}
+                className="rounded-full bg-sage px-8 py-4 text-sm font-semibold text-matcha-deep shadow-[0_18px_50px_rgba(0,0,0,0.25)] disabled:opacity-50"
+              >
+                {status === 'importing' ? 'Saving shot...' : 'Record shot'}
+              </button>
+
+              {onSkip ? (
+                <button
+                  type="button"
+                  onClick={onSkip}
+                  disabled={status === 'importing'}
+                  className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 backdrop-blur disabled:opacity-40"
+                  aria-label="Skip optional reaction"
+                >
+                  <SkipForward className="h-5 w-5" />
+                </button>
+              ) : null}
+            </div>
+
+            {onSkip ? (
+              <button
+                type="button"
+                onClick={onSkip}
+                disabled={status === 'importing'}
+                className="rounded-full bg-white/10 px-4 py-2 text-xs font-medium text-white/80 backdrop-blur disabled:opacity-40"
+              >
+                Skip this shot
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </main>
+    </MobileShell>
+  );
+}
+
+function BrowserMediaRecorder({
   stepNum,
   totalSteps,
   doneCount,

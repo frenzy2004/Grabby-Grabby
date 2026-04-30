@@ -23,6 +23,10 @@ const audioRecorderMimePriority = [
   'audio/mp4',
 ];
 
+const RECORDER_TIMESLICE_MS = 500;
+const MIN_VIDEO_BLOB_BYTES = 16 * 1024;
+const MIN_AUDIO_BLOB_BYTES = 4 * 1024;
+
 function pickRecorderMime(mediaType: 'video' | 'audio') {
   if (typeof MediaRecorder === 'undefined') return undefined;
   const mimes = mediaType === 'audio' ? audioRecorderMimePriority : recorderMimePriority;
@@ -37,6 +41,34 @@ function extFromMime(mime: string | undefined): 'webm' | 'mp4' | 'mov' {
   if (mime.includes('mp4')) return 'mp4';
   if (mime.includes('quicktime')) return 'mov';
   return 'webm';
+}
+
+async function canReadRecordedMedia(blob: Blob, mediaType: 'video' | 'audio') {
+  return await new Promise<boolean>((resolve) => {
+    const url = URL.createObjectURL(blob);
+    const media = document.createElement(mediaType);
+    let settled = false;
+
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      URL.revokeObjectURL(url);
+      resolve(ok);
+    };
+
+    const timer = window.setTimeout(() => finish(false), 4000);
+    media.preload = 'metadata';
+    media.muted = true;
+    media.onloadedmetadata = () => {
+      window.clearTimeout(timer);
+      finish(true);
+    };
+    media.onerror = () => {
+      window.clearTimeout(timer);
+      finish(false);
+    };
+    media.src = url;
+  });
 }
 
 export type UseGuidedRecordingOptions = {
@@ -78,6 +110,29 @@ export function useGuidedRecording({ prompt, onClipReady }: UseGuidedRecordingOp
     streamRef.current = null;
   }, []);
 
+  const stopActiveRecorder = useCallback(() => {
+    const recorder = recorderRef.current;
+    if (!recorder || recorder.state === 'inactive') return;
+
+    setState('finalizing');
+    stopTicking();
+    stopAutoStop();
+
+    try {
+      recorder.requestData();
+    } catch {
+      /* ignore */
+    }
+
+    window.setTimeout(() => {
+      try {
+        if (recorder.state !== 'inactive') recorder.stop();
+      } catch {
+        /* ignore */
+      }
+    }, 100);
+  }, [stopAutoStop, stopTicking]);
+
   const requestPermissionAndPreview = useCallback(async () => {
     setError(null);
     setState('requesting_permission');
@@ -114,11 +169,7 @@ export function useGuidedRecording({ prompt, onClipReady }: UseGuidedRecordingOp
     return () => {
       stopTicking();
       stopAutoStop();
-      try {
-        recorderRef.current?.stop();
-      } catch {
-        /* ignore */
-      }
+      stopActiveRecorder();
       stopStream();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -144,7 +195,12 @@ export function useGuidedRecording({ prompt, onClipReady }: UseGuidedRecordingOp
       if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
     };
 
-    recorder.onstop = () => {
+    recorder.onerror = () => {
+      setError('Recording failed on this device. Please try this clip again.');
+      setState('ready');
+    };
+
+    recorder.onstop = async () => {
       stopTicking();
       stopAutoStop();
       const elapsedSeconds = Math.max(
@@ -152,9 +208,23 @@ export function useGuidedRecording({ prompt, onClipReady }: UseGuidedRecordingOp
         Math.round((Date.now() - startedAtRef.current) / 1000),
       );
       const blobMime = mime ?? 'video/webm';
-      const blob = new Blob(chunksRef.current, { type: blobMime });
+      const chunks = chunksRef.current.filter((chunk) => {
+        if (chunk instanceof Blob) return chunk.size > 0;
+        return true;
+      });
       chunksRef.current = [];
       setState('finalizing');
+
+      const blob = new Blob(chunks, { type: blobMime });
+      const minBytes = mediaType === 'audio' ? MIN_AUDIO_BLOB_BYTES : MIN_VIDEO_BLOB_BYTES;
+      const readable = blob.size >= minBytes && (await canReadRecordedMedia(blob, mediaType));
+
+      if (!readable) {
+        setError('That clip did not finish saving cleanly. Please record this prompt again.');
+        setState('ready');
+        return;
+      }
+
       onClipReady({
         blob,
         durationSeconds: elapsedSeconds,
@@ -167,28 +237,20 @@ export function useGuidedRecording({ prompt, onClipReady }: UseGuidedRecordingOp
     startedAtRef.current = Date.now();
     setElapsedMs(0);
     setState('recording');
-    recorder.start();
+    recorder.start(RECORDER_TIMESLICE_MS);
 
     tickRef.current = window.setInterval(() => {
       setElapsedMs(Date.now() - startedAtRef.current);
     }, 100);
 
     autoStopRef.current = window.setTimeout(() => {
-      try {
-        recorderRef.current?.stop();
-      } catch {
-        /* ignore */
-      }
+      stopActiveRecorder();
     }, prompt.maxSeconds * 1000);
-  }, [mediaType, onClipReady, prompt.maxSeconds, stopAutoStop, stopTicking]);
+  }, [mediaType, onClipReady, prompt.maxSeconds, stopActiveRecorder, stopAutoStop, stopTicking]);
 
   const stopRecording = useCallback(() => {
-    try {
-      recorderRef.current?.stop();
-    } catch {
-      /* ignore */
-    }
-  }, []);
+    stopActiveRecorder();
+  }, [stopActiveRecorder]);
 
   const liveProgress = Math.min(1, elapsedMs / (prompt.maxSeconds * 1000));
 

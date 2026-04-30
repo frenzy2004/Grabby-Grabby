@@ -17,9 +17,16 @@ const recorderMimePriority = [
   'video/mp4',
 ];
 
-function pickRecorderMime() {
+const audioRecorderMimePriority = [
+  'audio/webm;codecs=opus',
+  'audio/webm',
+  'audio/mp4',
+];
+
+function pickRecorderMime(mediaType: 'video' | 'audio') {
   if (typeof MediaRecorder === 'undefined') return undefined;
-  for (const mime of recorderMimePriority) {
+  const mimes = mediaType === 'audio' ? audioRecorderMimePriority : recorderMimePriority;
+  for (const mime of mimes) {
     if (MediaRecorder.isTypeSupported(mime)) return mime;
   }
   return undefined;
@@ -39,6 +46,7 @@ export type UseGuidedRecordingOptions = {
 };
 
 export function useGuidedRecording({ prompt, onClipReady }: UseGuidedRecordingOptions) {
+  const mediaType = prompt.mediaType ?? 'video';
   const [state, setState] = useState<RecordingState>('idle');
   const [elapsedMs, setElapsedMs] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -74,16 +82,20 @@ export function useGuidedRecording({ prompt, onClipReady }: UseGuidedRecordingOp
     setError(null);
     setState('requesting_permission');
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: prompt.camera === 'rear' ? { ideal: 'environment' } : { ideal: 'user' },
-          width: { ideal: 1080 },
-          height: { ideal: 1920 },
-        },
-        audio: true,
-      });
+      const stream = await navigator.mediaDevices.getUserMedia(
+        mediaType === 'audio'
+          ? { audio: true }
+          : {
+              video: {
+                facingMode: prompt.camera === 'rear' ? { ideal: 'environment' } : { ideal: 'user' },
+                width: { ideal: 1080 },
+                height: { ideal: 1920 },
+              },
+              audio: true,
+            },
+      );
       streamRef.current = stream;
-      if (videoRef.current) {
+      if (mediaType === 'video' && videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.muted = true;
         await videoRef.current.play().catch(() => undefined);
@@ -93,7 +105,7 @@ export function useGuidedRecording({ prompt, onClipReady }: UseGuidedRecordingOp
       setError(err instanceof Error ? err.message : 'Camera access was blocked.');
       setState('idle');
     }
-  }, [prompt.camera]);
+  }, [mediaType, prompt.camera]);
 
   // Re-acquire the stream when the prompt's camera direction changes.
   useEffect(() => {
@@ -109,11 +121,11 @@ export function useGuidedRecording({ prompt, onClipReady }: UseGuidedRecordingOp
       stopStream();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prompt.step, prompt.camera]);
+  }, [prompt.step, prompt.camera, mediaType]);
 
   const startRecording = useCallback(() => {
     if (!streamRef.current) return;
-    const mime = pickRecorderMime();
+    const mime = pickRecorderMime(mediaType);
     let recorder: MediaRecorder;
     try {
       recorder = mime
@@ -167,7 +179,7 @@ export function useGuidedRecording({ prompt, onClipReady }: UseGuidedRecordingOp
         /* ignore */
       }
     }, prompt.maxSeconds * 1000);
-  }, [onClipReady, prompt.maxSeconds, stopAutoStop, stopTicking]);
+  }, [mediaType, onClipReady, prompt.maxSeconds, stopAutoStop, stopTicking]);
 
   const stopRecording = useCallback(() => {
     try {

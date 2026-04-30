@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react';
 
 export type RecordedClip = {
   step: number;
+  mediaType: 'video' | 'audio';
   blob: Blob;
   durationSeconds: number;
   ext: 'webm' | 'mp4' | 'mov';
@@ -22,12 +23,14 @@ type Listener = () => void;
 type Snapshot = {
   clipsByStep: Record<number, RecordedClip>;
   orderedClips: RecordedClip[];
+  skippedSteps: Record<number, true>;
   socialHandle: string;
   tableId: string | null;
   slug: string | null;
 };
 
 let clipsByStep: Record<number, RecordedClip> = {};
+let skippedSteps: Record<number, true> = {};
 let socialHandle = '';
 let tableId: string | null = null;
 let slug: string | null = null;
@@ -41,6 +44,7 @@ function buildSnapshot(): Snapshot {
   return {
     clipsByStep,
     orderedClips: Object.values(clipsByStep).sort((a, b) => a.step - b.step),
+    skippedSteps,
     socialHandle,
     tableId,
     slug,
@@ -50,12 +54,22 @@ function buildSnapshot(): Snapshot {
 export const recordingStore = {
   setClip(clip: RecordedClip) {
     clipsByStep = { ...clipsByStep, [clip.step]: clip };
+    const nextSkipped = { ...skippedSteps };
+    delete nextSkipped[clip.step];
+    skippedSteps = nextSkipped;
     emit();
   },
   removeClip(step: number) {
     const next = { ...clipsByStep };
     delete next[step];
     clipsByStep = next;
+    emit();
+  },
+  skipStep(step: number) {
+    const nextClips = { ...clipsByStep };
+    delete nextClips[step];
+    clipsByStep = nextClips;
+    skippedSteps = { ...skippedSteps, [step]: true };
     emit();
   },
   setMeta(meta: { slug?: string; tableId?: string | null; socialHandle?: string }) {
@@ -66,6 +80,7 @@ export const recordingStore = {
   },
   reset() {
     clipsByStep = {};
+    skippedSteps = {};
     socialHandle = '';
     tableId = null;
     slug = null;

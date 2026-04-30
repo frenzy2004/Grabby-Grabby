@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, Mic, SkipForward } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { ProgressPips } from '@/components/ProgressPips';
@@ -42,24 +42,34 @@ export function GuidedRecordingClient({ slug, tableId, campaign }: Props) {
   }, [router, slug, tableId]);
 
   const currentPrompt = campaign.prompts[stepNum - 1];
+  const goNext = useCallback(() => {
+    if (stepNum < totalSteps) {
+      window.setTimeout(() => setStepNum((s) => s + 1), 250);
+    } else {
+      window.setTimeout(() => router.push('/preview'), 250);
+    }
+  }, [router, stepNum, totalSteps]);
 
   const handleClipReady = useCallback(
     (clip: ClipReadyInput) => {
       recordingStore.setClip({
         step: stepNum,
+        mediaType: currentPrompt?.mediaType ?? 'video',
         blob: clip.blob,
         durationSeconds: clip.durationSeconds,
         ext: clip.ext,
       });
 
-      if (stepNum < totalSteps) {
-        window.setTimeout(() => setStepNum((s) => s + 1), 250);
-      } else {
-        window.setTimeout(() => router.push('/preview'), 250);
-      }
+      goNext();
     },
-    [router, stepNum, totalSteps],
+    [currentPrompt?.mediaType, goNext, stepNum],
   );
+
+  const handleSkip = useCallback(() => {
+    if (!currentPrompt?.optional) return;
+    recordingStore.skipStep(stepNum);
+    goNext();
+  }, [currentPrompt?.optional, goNext, stepNum]);
 
   if (!hasConsent || !currentPrompt) {
     return null;
@@ -70,9 +80,13 @@ export function GuidedRecordingClient({ slug, tableId, campaign }: Props) {
       key={`${currentPrompt.step}-${currentPrompt.camera}`}
       stepNum={stepNum}
       totalSteps={totalSteps}
-      doneCount={Object.keys(store.clipsByStep).filter((k) => Number(k) < stepNum).length}
+      doneCount={
+        Object.keys(store.clipsByStep).filter((k) => Number(k) < stepNum).length +
+        Object.keys(store.skippedSteps).filter((k) => Number(k) < stepNum).length
+      }
       prompt={currentPrompt}
       onClipReady={handleClipReady}
+      onSkip={currentPrompt.optional ? handleSkip : undefined}
       onBack={() => {
         if (stepNum > 1) setStepNum((s) => s - 1);
         else router.back();
@@ -87,6 +101,7 @@ type InnerProps = {
   doneCount: number;
   prompt: PublicReviewCampaign['prompts'][number];
   onClipReady: (clip: ClipReadyInput) => void;
+  onSkip?: () => void;
   onBack: () => void;
 };
 
@@ -96,8 +111,11 @@ function RecorderInner({
   doneCount,
   prompt,
   onClipReady,
+  onSkip,
   onBack,
 }: InnerProps) {
+  const mediaType = prompt.mediaType ?? 'video';
+  const isAudio = mediaType === 'audio';
   const {
     state,
     elapsedMs,
@@ -121,13 +139,24 @@ function RecorderInner({
 
   return (
     <main className="relative flex min-h-dvh flex-col bg-[#0e0d0b] text-white">
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        className="absolute inset-0 h-full w-full object-cover"
-      />
+      {isAudio ? (
+        <div
+          className="absolute inset-0 flex items-center justify-center bg-[radial-gradient(circle_at_50%_35%,rgba(184,201,168,0.28),transparent_34%),linear-gradient(160deg,#15130f,#272119_55%,#0e0d0b)]"
+          aria-hidden
+        >
+          <div className="flex h-40 w-40 items-center justify-center rounded-full border border-white/15 bg-white/10 shadow-[0_24px_80px_rgba(0,0,0,0.35)] backdrop-blur-md">
+            <Mic className="h-16 w-16 text-sage" />
+          </div>
+        </div>
+      ) : (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="absolute inset-0 h-full w-full object-cover"
+        />
+      )}
 
       <div className="absolute inset-0 bg-black/15" aria-hidden />
 
@@ -147,6 +176,8 @@ function RecorderInner({
             totalSteps={totalSteps}
             title={prompt.title}
             tip={prompt.tip}
+            label={isAudio ? 'Voice' : 'Shot'}
+            optional={prompt.optional}
           />
         </div>
 
@@ -176,7 +207,30 @@ function RecorderInner({
               disabled={state === 'requesting_permission' || state === 'finalizing'}
               onClick={handleRecordPress}
             />
+
+            {onSkip ? (
+              <button
+                type="button"
+                onClick={onSkip}
+                disabled={state === 'recording' || state === 'requesting_permission' || state === 'finalizing'}
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 backdrop-blur disabled:opacity-40"
+                aria-label="Skip optional reaction"
+              >
+                <SkipForward className="h-5 w-5" />
+              </button>
+            ) : null}
           </div>
+
+          {onSkip ? (
+            <button
+              type="button"
+              onClick={onSkip}
+              disabled={state === 'recording' || state === 'requesting_permission' || state === 'finalizing'}
+              className="rounded-full bg-white/10 px-4 py-2 text-xs font-medium text-white/80 backdrop-blur disabled:opacity-40"
+            >
+              Skip this shot
+            </button>
+          ) : null}
         </div>
       </div>
     </main>

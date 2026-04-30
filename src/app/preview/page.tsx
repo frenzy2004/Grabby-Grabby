@@ -11,10 +11,12 @@ import { submit } from '@/lib/humeoApi';
 import { recordingStore, useRecordingStore } from '@/lib/recordingStore';
 import type { PublicSubmitResult } from '@/lib/reviews/types';
 import { ensureDeviceKey } from '@/lib/utils';
+import { addVoiceoverToVideo } from '@/lib/voiceover';
 
 type Phase =
   | { kind: 'idle' }
   | { kind: 'concatenating'; progress: number }
+  | { kind: 'mixing'; progress: number }
   | { kind: 'uploading' }
   | { kind: 'polling'; result: PublicSubmitResult }
   | { kind: 'ready'; result: PublicSubmitResult }
@@ -59,7 +61,10 @@ export default function PreviewPage() {
   }, [pollResult]);
 
   const runPipeline = useCallback(async () => {
-    if (store.orderedClips.length === 0) {
+    const videoClips = store.orderedClips.filter((clip) => clip.mediaType !== 'audio');
+    const audioClips = store.orderedClips.filter((clip) => clip.mediaType === 'audio');
+
+    if (videoClips.length === 0) {
       router.replace('/');
       return;
     }
@@ -68,8 +73,15 @@ export default function PreviewPage() {
       setPhase({ kind: 'concatenating', progress: 0 });
 
       const concat = await concatClips(
-        store.orderedClips.map((clip) => ({ blob: clip.blob, ext: clip.ext })),
+        videoClips.map((clip) => ({ blob: clip.blob, ext: clip.ext })),
         (progress) => setPhase({ kind: 'concatenating', progress }),
+      );
+
+      setPhase({ kind: 'mixing', progress: 0 });
+      const finalVideo = await addVoiceoverToVideo(
+        { blob: concat.blob, filename: concat.filename },
+        audioClips.map((clip) => ({ blob: clip.blob, ext: clip.ext })),
+        (progress) => setPhase({ kind: 'mixing', progress }),
       );
 
       setPhase({ kind: 'uploading' });
@@ -80,9 +92,9 @@ export default function PreviewPage() {
         socialHandle: store.socialHandle || undefined,
         deviceKey: ensureDeviceKey(),
         tableId: store.tableId,
-        durationSeconds: concat.durationSeconds,
-        video: concat.blob,
-        videoFileName: concat.filename,
+        durationSeconds: finalVideo.durationSeconds,
+        video: finalVideo.blob,
+        videoFileName: finalVideo.filename,
       });
 
       setPhase({ kind: 'polling', result });
@@ -125,6 +137,11 @@ export default function PreviewPage() {
         label: 'Stitching recorded clips',
         done: phase.kind !== 'concatenating',
         current: phase.kind === 'concatenating',
+      },
+      {
+        label: 'Adding voiceover',
+        done: phase.kind === 'uploading' || phase.kind === 'polling' || phase.kind === 'ready',
+        current: phase.kind === 'mixing',
       },
       {
         label: 'Saving the video',
@@ -215,6 +232,12 @@ export default function PreviewPage() {
             </p>
           ) : null}
 
+          {phase.kind === 'mixing' ? (
+            <p className="mt-4 text-center font-mono text-[10px] uppercase tracking-[0.15em] text-muted">
+              Adding voiceover - {Math.round(phase.progress * 100)}%
+            </p>
+          ) : null}
+
           {phase.kind === 'uploading' ? (
             <p className="mt-4 flex items-center justify-center gap-2 text-center font-mono text-[10px] uppercase tracking-[0.15em] text-muted">
               <Loader2 className="h-3 w-3 animate-spin" /> Saving recording
@@ -231,7 +254,10 @@ export default function PreviewPage() {
         {isReady ? (
           <div className="mt-4 flex flex-wrap gap-2">
             <span className="rounded-full border border-ink/10 bg-paper px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-ink">
-              {store.orderedClips.length} clips
+              {store.orderedClips.filter((clip) => clip.mediaType !== 'audio').length} shots
+            </span>
+            <span className="rounded-full border border-ink/10 bg-paper px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-ink">
+              {store.orderedClips.filter((clip) => clip.mediaType === 'audio').length} voice notes
             </span>
             <span className="rounded-full border border-ink/10 bg-paper px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-ink">
               saved locally

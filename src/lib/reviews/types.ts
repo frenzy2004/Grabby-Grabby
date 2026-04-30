@@ -59,8 +59,10 @@ export const ClipPromptSchema = z.object({
   step: z.number().int().min(1).max(20),
   title: z.string().trim().min(1).max(160),
   tip: z.string().trim().max(280).default(''),
+  mediaType: z.enum(['video', 'audio']).default('video'),
   camera: z.enum(['front', 'rear']).default('front'),
   maxSeconds: z.number().int().min(1).max(60).default(10),
+  optional: z.boolean().default(false),
 });
 export type ClipPrompt = z.infer<typeof ClipPromptSchema>;
 

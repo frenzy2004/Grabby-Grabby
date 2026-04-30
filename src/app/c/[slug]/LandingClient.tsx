@@ -46,7 +46,7 @@ export function LandingClient({ slug, tableId, campaign }: Props) {
         </h1>
 
         <p className="mt-4 max-w-[300px] text-[14px] leading-[1.5] text-ink/65">
-          We&apos;ll guide you through a quick video review &mdash; and do all the editing for you.
+          We&apos;ll guide you through a few food shots and short voice notes &mdash; then edit the reel for you.
         </p>
 
         <label className="mt-6 flex max-w-[320px] cursor-pointer items-start gap-3 rounded-2xl border border-ink/10 bg-paper px-4 py-3 text-left">
@@ -57,7 +57,7 @@ export function LandingClient({ slug, tableId, campaign }: Props) {
             className="mt-0.5 h-4 w-4 accent-matcha"
           />
           <span className="text-[11px] leading-[1.5] text-ink/65">
-            I allow {campaign.restaurantName} to review, edit, and use my video on social media.
+            I allow {campaign.restaurantName} to review, edit, and use my video and voice on social media.
           </span>
         </label>
       </section>

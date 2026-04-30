@@ -1,5 +1,5 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { fetchFile } from '@ffmpeg/util';
+import { fetchFile, toBlobURL } from '@ffmpeg/util';
 
 export type AudioInput = {
   blob: Blob;
@@ -14,7 +14,11 @@ export type VoiceoverResult = {
 
 async function createFFmpeg(): Promise<FFmpeg> {
   const ffmpeg = new FFmpeg();
-  await ffmpeg.load();
+  const coreBaseUrl = 'https://unpkg.com/@ffmpeg/core@0.12.9/dist/umd';
+  await ffmpeg.load({
+    coreURL: await toBlobURL(`${coreBaseUrl}/ffmpeg-core.js`, 'text/javascript'),
+    wasmURL: await toBlobURL(`${coreBaseUrl}/ffmpeg-core.wasm`, 'application/wasm'),
+  });
   return ffmpeg;
 }
 

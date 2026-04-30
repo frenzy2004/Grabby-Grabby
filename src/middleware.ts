@@ -29,6 +29,10 @@ function parseBasicAuth(header: string | null) {
 }
 
 export function middleware(req: NextRequest) {
+  if (process.env.NODE_ENV !== 'production') {
+    return NextResponse.next();
+  }
+
   const expectedUsername = process.env.ADMIN_USERNAME;
   const expectedPassword = process.env.ADMIN_PASSWORD;
 

@@ -110,7 +110,7 @@ function PhoneVideoPreview({ src }: { src: string }) {
         playsInline
         preload="metadata"
         src={src}
-        className="aspect-[9/16] w-full bg-black object-cover"
+        className="admin-review-video aspect-[9/16] w-full bg-black object-cover"
       />
     </div>
   );

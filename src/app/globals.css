@@ -19,6 +19,20 @@ body {
   box-sizing: border-box;
 }
 
+.admin-review-video:fullscreen {
+  width: 100vw !important;
+  height: 100vh !important;
+  background: #000 !important;
+  object-fit: contain !important;
+}
+
+.admin-review-video:-webkit-full-screen {
+  width: 100vw !important;
+  height: 100vh !important;
+  background: #000 !important;
+  object-fit: contain !important;
+}
+
 @layer utilities {
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
